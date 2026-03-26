@@ -2131,14 +2131,18 @@ export default function ChatView({ threadId }: ChatViewProps) {
       : "local";
 
   useEffect(() => {
-    if (phase !== "running") return;
+    // Tick while the agent is running (for elapsed timers) OR while an
+    // auto-continue / delayed-send countdown is in progress.
+    const hasActiveCountdown =
+      activeThread?.autoContinueStatus != null || activeThread?.delayedSend != null;
+    if (phase !== "running" && !hasActiveCountdown) return;
     const timer = window.setInterval(() => {
       setNowTick(Date.now());
     }, 1000);
     return () => {
       window.clearInterval(timer);
     };
-  }, [phase]);
+  }, [phase, activeThread?.autoContinueStatus, activeThread?.delayedSend]);
 
   const beginSendPhase = useCallback((nextPhase: Exclude<SendPhase, "idle">) => {
     setSendStartedAt((current) => current ?? new Date().toISOString());
