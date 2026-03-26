@@ -1,6 +1,6 @@
 ---
 id: t3c-02es
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-03-26T17:10:31Z

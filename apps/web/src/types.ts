@@ -5,6 +5,7 @@ import type {
   OrchestrationSessionStatus,
   OrchestrationThreadActivity,
   ProjectScript as ContractProjectScript,
+  ThreadDelayedSend as ContractThreadDelayedSend,
   ThreadAutoContinueSettings,
   ThreadId,
   ProjectId,
@@ -61,6 +62,10 @@ export interface ProposedPlan {
   updatedAt: string;
 }
 
+export interface ThreadDelayedSend extends Omit<ContractThreadDelayedSend, "attachments"> {
+  attachments: ChatAttachment[];
+}
+
 export interface TurnDiffFileChange {
   path: string;
   kind?: string | undefined;
@@ -106,6 +111,7 @@ export interface Thread {
   updatedAt?: string | undefined;
   latestTurn: OrchestrationLatestTurn | null;
   lastVisitedAt?: string | undefined;
+  delayedSend?: ThreadDelayedSend | null;
   branch: string | null;
   worktreePath: string | null;
   turnDiffSummaries: TurnDiffSummary[];

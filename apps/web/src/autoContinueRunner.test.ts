@@ -2,9 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import type { ThreadAutoContinueSettings } from "@t3tools/contracts";
 import {
+  deriveDelayedSendStatus,
   deriveAutoContinueStatusSnapshot,
   resolveEffectiveAutoContinueDelayResetAt,
-} from "./autoContinueRunner";
+} from "./automationStatus";
 import type { Thread } from "./types";
 
 describe("resolveEffectiveAutoContinueDelayResetAt", () => {
@@ -131,5 +132,34 @@ describe("deriveAutoContinueStatusSnapshot", () => {
     });
     expect(afterCooldown).not.toBeNull();
     expect(afterCooldown?.assistantMessageId).toBe("assistant-2");
+  });
+});
+
+describe("deriveDelayedSendStatus", () => {
+  it("derives delayed send display state from the thread snapshot", () => {
+    const status = deriveDelayedSendStatus({
+      delayedSend: {
+        threadId: "thread-1" as never,
+        messageId: "message-1" as never,
+        text: "ship it",
+        attachments: [],
+        dueAt: "2026-03-26T10:05:00.000Z",
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        createdAt: "2026-03-26T10:00:00.000Z",
+      },
+      nowMs: Date.parse("2026-03-26T10:04:30.000Z"),
+    });
+
+    expect(status).toEqual({
+      scheduledAt: "2026-03-26T10:00:00.000Z",
+      dispatchAtMs: Date.parse("2026-03-26T10:05:00.000Z"),
+      message: "ship it",
+      remainingMs: 30_000,
+    });
+  });
+
+  it("returns null when no delayed send is scheduled", () => {
+    expect(deriveDelayedSendStatus({ delayedSend: undefined, nowMs: Date.now() })).toBeNull();
   });
 });

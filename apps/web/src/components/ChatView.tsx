@@ -187,8 +187,7 @@ import {
 } from "./ChatView.logic";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { buildQuickAutomationPreset, extractQuickAutomationTask } from "../automationPreset";
-import { useDelayedSendStore } from "../delayedSendStore";
-import { deriveAutoContinueStatusSnapshot } from "../autoContinueRunner";
+import { deriveAutoContinueStatusSnapshot } from "../automationStatus";
 
 const ATTACHMENT_PREVIEW_HANDOFF_TTL_MS = 5000;
 const IMAGE_SIZE_LIMIT_LABEL = `${Math.round(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES / (1024 * 1024))}MB`;
@@ -834,9 +833,18 @@ export default function ChatView({ threadId }: ChatViewProps) {
     isComposerApprovalState ||
     pendingUserInputs.length > 0 ||
     (showPlanFollowUpPrompt && activeProposedPlan !== null);
-  const scheduledDelayedSend = useDelayedSendStore(
-    (store) => store.scheduledByThreadId[threadId] ?? null,
-  );
+  const scheduledDelayedSend = activeThread?.delayedSend ?? null;
+  const scheduledDelayedSendDelayMinutes = useMemo(() => {
+    if (!scheduledDelayedSend) {
+      return undefined;
+    }
+    const createdAtMs = Date.parse(scheduledDelayedSend.createdAt);
+    const dueAtMs = Date.parse(scheduledDelayedSend.dueAt);
+    if (Number.isNaN(createdAtMs) || Number.isNaN(dueAtMs)) {
+      return undefined;
+    }
+    return Math.max(0, Math.round((dueAtMs - createdAtMs) / 60_000));
+  }, [scheduledDelayedSend]);
   const delayedSendDisabledReason = !activeThread
     ? "Select a thread first."
     : activePendingProgress
@@ -2906,7 +2914,8 @@ export default function ChatView({ threadId }: ChatViewProps) {
 
   const scheduleDelayedSend = useCallback(
     async (delayMinutes: number) => {
-      if (!activeThread || delayedSendDisabledReason) {
+      const api = readNativeApi();
+      if (!api || !activeThread || delayedSendDisabledReason) {
         if (delayedSendDisabledReason) {
           toastManager.add({
             type: "warning",
@@ -2937,16 +2946,15 @@ export default function ChatView({ threadId }: ChatViewProps) {
         const dueAtMs = scheduledAtMs + delayMinutes * 60_000;
         const firstImageName = composerImagesSnapshot[0]?.name;
         const titleSeed = trimmed || (firstImageName ? `Image: ${firstImageName}` : "New thread");
-        useDelayedSendStore.getState().scheduleSend({
+        await api.orchestration.dispatchCommand({
+          type: "thread.delayed-send.schedule",
           threadId: activeThread.id,
-          createdAt: new Date(scheduledAtMs).toISOString(),
-          dueAt: new Date(dueAtMs).toISOString(),
-          delayMinutes,
-          displayText: truncateTitle(
-            trimmed || (firstImageName ? `Image: ${firstImageName}` : "Image"),
-          ),
+          commandId: newCommandId(),
+          messageId: newMessageId(),
           text: trimmed,
           attachments,
+          createdAt: new Date(scheduledAtMs).toISOString(),
+          dueAt: new Date(dueAtMs).toISOString(),
           modelSelection: selectedModelSelection,
           runtimeMode,
           interactionMode,
@@ -4543,8 +4551,8 @@ export default function ChatView({ threadId }: ChatViewProps) {
           onOpenChange={setIsDelayedSendDialogOpen}
           hasExistingScheduledSend={scheduledDelayedSend !== null}
           onSchedule={scheduleDelayedSend}
-          {...(scheduledDelayedSend
-            ? { defaultDelayMinutes: scheduledDelayedSend.delayMinutes }
+          {...(scheduledDelayedSendDelayMinutes !== undefined
+            ? { defaultDelayMinutes: scheduledDelayedSendDelayMinutes }
             : {})}
         />
       </div>

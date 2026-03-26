@@ -15,7 +15,6 @@ import { AutoContinueRunner } from "../autoContinueRunner";
 import { Button } from "../components/ui/button";
 import { AnchoredToastProvider, ToastProvider, toastManager } from "../components/ui/toast";
 import { resolveAndPersistPreferredEditor } from "../editorPreferences";
-import { DelayedSendRunner } from "../delayedSendRunner";
 import { serverConfigQueryOptions, serverQueryKeys } from "../lib/serverReactQuery";
 import { readNativeApi } from "../nativeApi";
 import { clearPromotedDraftThreads, useComposerDraftStore } from "../composerDraftStore";
@@ -56,7 +55,6 @@ function RootRouteView() {
       <AnchoredToastProvider>
         <EventRouter />
         <AutoContinueRunner />
-        <DelayedSendRunner />
         <DesktopProjectBootstrap />
         <Outlet />
       </AnchoredToastProvider>

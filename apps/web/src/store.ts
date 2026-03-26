@@ -8,7 +8,7 @@ import {
 } from "@t3tools/contracts";
 import { resolveModelSlugForProvider } from "@t3tools/shared/model";
 import { create } from "zustand";
-import { type ChatMessage, type Project, type Thread } from "./types";
+import { type ChatAttachment, type ChatMessage, type Project, type Thread } from "./types";
 import { Debouncer } from "@tanstack/react-pacer";
 
 // ── State ────────────────────────────────────────────────────────────
@@ -232,6 +232,19 @@ function attachmentPreviewRoutePath(attachmentId: string): string {
   return `/attachments/${encodeURIComponent(attachmentId)}`;
 }
 
+function mapChatAttachmentsFromReadModel(
+  attachments: ReadonlyArray<{ id: string; name: string; mimeType: string; sizeBytes: number }>,
+): ChatAttachment[] {
+  return attachments.map((attachment) => ({
+    type: "image",
+    id: attachment.id,
+    name: attachment.name,
+    mimeType: attachment.mimeType,
+    sizeBytes: attachment.sizeBytes,
+    previewUrl: toAttachmentPreviewUrl(attachmentPreviewRoutePath(attachment.id)),
+  }));
+}
+
 // ── Pure state transition functions ────────────────────────────────────
 
 export function syncServerReadModel(state: AppState, readModel: OrchestrationReadModel): AppState {
@@ -271,14 +284,9 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
             }
           : null,
         messages: thread.messages.map((message) => {
-          const attachments = message.attachments?.map((attachment) => ({
-            type: "image" as const,
-            id: attachment.id,
-            name: attachment.name,
-            mimeType: attachment.mimeType,
-            sizeBytes: attachment.sizeBytes,
-            previewUrl: toAttachmentPreviewUrl(attachmentPreviewRoutePath(attachment.id)),
-          }));
+          const attachments = message.attachments
+            ? mapChatAttachmentsFromReadModel(message.attachments)
+            : undefined;
           const normalizedMessage: ChatMessage = {
             id: message.id,
             role: message.role,
@@ -304,6 +312,23 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
         updatedAt: thread.updatedAt,
         latestTurn: thread.latestTurn,
         lastVisitedAt: existing?.lastVisitedAt ?? thread.updatedAt,
+        delayedSend: thread.delayedSend
+          ? {
+              ...thread.delayedSend,
+              attachments: mapChatAttachmentsFromReadModel(thread.delayedSend.attachments),
+              ...(thread.delayedSend.modelSelection
+                ? {
+                    modelSelection: {
+                      ...thread.delayedSend.modelSelection,
+                      model: resolveModelSlugForProvider(
+                        thread.delayedSend.modelSelection.provider,
+                        thread.delayedSend.modelSelection.model,
+                      ),
+                    },
+                  }
+                : {}),
+            }
+          : null,
         branch: thread.branch,
         worktreePath: thread.worktreePath,
         turnDiffSummaries: thread.checkpoints.map((checkpoint) => ({
