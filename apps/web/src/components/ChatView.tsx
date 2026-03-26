@@ -149,7 +149,7 @@ import { deriveLatestContextWindowSnapshot } from "../lib/contextWindow";
 import { shouldUseCompactComposerFooter } from "./composerFooterLayout";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
 import { ComposerPromptEditor, type ComposerPromptEditorHandle } from "./ComposerPromptEditor";
-import { AutomationSettingsDialog } from "./AutomationSettingsDialog";
+import { AutomationPanel, type AutomationPanelTab } from "./AutomationPanel";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { MessagesTimeline } from "./chat/MessagesTimeline";
 import { ChatHeader } from "./chat/ChatHeader";
@@ -169,7 +169,6 @@ import {
 } from "./chat/composerProviderRegistry";
 import { ProviderStatusBanner } from "./chat/ProviderStatusBanner";
 import { ThreadErrorBanner } from "./chat/ThreadErrorBanner";
-import { DelayedSendDialog } from "./DelayedSendDialog";
 import {
   buildExpiredTerminalContextToastCopy,
   buildLocalDraftThread,
@@ -343,8 +342,9 @@ export default function ChatView({ threadId }: ChatViewProps) {
   >(new Map());
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [quickAutomationTask, setQuickAutomationTask] = useState("");
-  const [isAutomationDialogOpen, setIsAutomationDialogOpen] = useState(false);
-  const [isDelayedSendDialogOpen, setIsDelayedSendDialogOpen] = useState(false);
+  const [automationPanelOpen, setAutomationPanelOpen] = useState(false);
+  const [automationPanelDefaultTab, setAutomationPanelDefaultTab] =
+    useState<AutomationPanelTab>("auto-continue");
   const [isDragOverComposer, setIsDragOverComposer] = useState(false);
   const [expandedImage, setExpandedImage] = useState<ExpandedImagePreview | null>(null);
   const [optimisticUserMessages, setOptimisticUserMessages] = useState<ChatMessage[]>([]);
@@ -2831,12 +2831,16 @@ export default function ChatView({ threadId }: ChatViewProps) {
     });
   };
 
-  const openAutomationDialog = useCallback(() => {
-    if (!serverThread) {
-      return;
-    }
-    setIsAutomationDialogOpen(true);
-  }, [serverThread]);
+  const openAutomationPanel = useCallback(
+    (defaultTab: AutomationPanelTab) => {
+      if (!serverThread) {
+        return;
+      }
+      setAutomationPanelDefaultTab(defaultTab);
+      setAutomationPanelOpen(true);
+    },
+    [serverThread],
+  );
 
   const applyAutomationSettings = useCallback(
     async (nextAutoContinue: typeof normalizedAutoContinue) => {
@@ -2909,8 +2913,37 @@ export default function ChatView({ threadId }: ChatViewProps) {
     if (delayedSendDisabledReason) {
       return;
     }
-    setIsDelayedSendDialogOpen(true);
+    setAutomationPanelDefaultTab("schedule-send");
+    setAutomationPanelOpen(true);
   }, [delayedSendDisabledReason]);
+
+  const cancelDelayedSend = useCallback(async () => {
+    const api = readNativeApi();
+    if (!api || !activeThread || !scheduledDelayedSend) {
+      return;
+    }
+
+    try {
+      await api.orchestration.dispatchCommand({
+        type: "thread.delayed-send.cancel",
+        threadId: activeThread.id,
+        commandId: newCommandId(),
+        createdAt: new Date().toISOString(),
+      });
+      toastManager.add({
+        type: "success",
+        title: "Delayed send canceled",
+        description: "The queued message will no longer send automatically.",
+      });
+    } catch (error) {
+      toastManager.add({
+        type: "error",
+        title: "Unable to cancel delayed send",
+        description: error instanceof Error ? error.message : "Failed to cancel the delayed send.",
+      });
+      throw error;
+    }
+  }, [activeThread, scheduledDelayedSend]);
 
   const scheduleDelayedSend = useCallback(
     async (delayMinutes: number) => {
@@ -2979,7 +3012,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
         setComposerHighlightedItemId(null);
         setComposerCursor(0);
         setComposerTrigger(null);
-        setIsDelayedSendDialogOpen(false);
+        setAutomationPanelOpen(false);
         toastManager.add({
           type: "success",
           title: "Delayed send scheduled",
@@ -4273,7 +4306,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
                             size="sm"
                             variant="ghost"
                             className="h-8 gap-1.5 rounded-full px-2.5 text-muted-foreground/80"
-                            onClick={openAutomationDialog}
+                            onClick={() => openAutomationPanel("auto-continue")}
                             disabled={!isServerThread || isConnecting}
                             title={
                               !isServerThread
@@ -4538,19 +4571,20 @@ export default function ChatView({ threadId }: ChatViewProps) {
           />
         ) : null}
 
-        <AutomationSettingsDialog
-          open={isAutomationDialogOpen}
-          onOpenChange={setIsAutomationDialogOpen}
+        <AutomationPanel
+          open={automationPanelOpen}
+          onOpenChange={setAutomationPanelOpen}
+          defaultTab={automationPanelDefaultTab}
           threadId={activeThread.id}
           currentSettings={normalizedAutoContinue}
           onSave={applyAutomationSettings}
-        />
-
-        <DelayedSendDialog
-          open={isDelayedSendDialogOpen}
-          onOpenChange={setIsDelayedSendDialogOpen}
           hasExistingScheduledSend={scheduledDelayedSend !== null}
+          draftScheduledMessage={prompt}
+          onDraftScheduledMessageChange={setPrompt}
+          draftAttachmentCount={composerImages.length}
+          scheduleDisabledReason={delayedSendDisabledReason}
           onSchedule={scheduleDelayedSend}
+          onCancelScheduledSend={cancelDelayedSend}
           {...(scheduledDelayedSendDelayMinutes !== undefined
             ? { defaultDelayMinutes: scheduledDelayedSendDelayMinutes }
             : {})}

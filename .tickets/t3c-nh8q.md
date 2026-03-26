@@ -1,6 +1,6 @@
 ---
 id: t3c-nh8q
-status: open
+status: closed
 deps: [t3c-fzxr, t3c-ose3]
 links: []
 created: 2026-03-26T17:13:22Z
