@@ -294,6 +294,22 @@ export const OrchestrationLatestTurn = Schema.Struct({
 });
 export type OrchestrationLatestTurn = typeof OrchestrationLatestTurn.Type;
 
+export const OrchestrationAutoContinueBlockedBy = Schema.NullOr(
+  Schema.Literals(["approval", "user-input"]),
+);
+export type OrchestrationAutoContinueBlockedBy = typeof OrchestrationAutoContinueBlockedBy.Type;
+
+export const OrchestrationAutoContinueStatus = Schema.Struct({
+  startedAt: IsoDateTime,
+  dispatchAt: IsoDateTime,
+  assistantMessageId: MessageId,
+  blockedBy: OrchestrationAutoContinueBlockedBy,
+  sentCount: NonNegativeInt,
+  nextMessageIndex: NonNegativeInt,
+  nextMessageText: Schema.String,
+});
+export type OrchestrationAutoContinueStatus = typeof OrchestrationAutoContinueStatus.Type;
+
 export const OrchestrationThread = Schema.Struct({
   id: ThreadId,
   projectId: ProjectId,
@@ -313,6 +329,9 @@ export const OrchestrationThread = Schema.Struct({
       delayMinutes: AUTO_CONTINUE_DEFAULT_DELAY_MINUTES,
       cooldownMinutes: AUTO_CONTINUE_DEFAULT_COOLDOWN_MINUTES,
     })),
+  ),
+  autoContinueStatus: Schema.optionalKey(Schema.NullOr(OrchestrationAutoContinueStatus)).pipe(
+    Schema.withDecodingDefault(() => null),
   ),
   delayedSend: Schema.optionalKey(Schema.NullOr(Schema.suspend(() => ThreadDelayedSend))),
   latestTurn: Schema.NullOr(OrchestrationLatestTurn),

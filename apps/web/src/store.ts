@@ -272,6 +272,7 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
         runtimeMode: thread.runtimeMode,
         interactionMode: thread.interactionMode,
         autoContinue: thread.autoContinue,
+        autoContinueStatus: thread.autoContinueStatus ?? null,
         session: thread.session
           ? {
               provider: toLegacyProvider(thread.session.providerName),

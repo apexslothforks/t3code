@@ -1,5 +1,6 @@
 import {
   DEFAULT_MODEL_BY_PROVIDER,
+  MessageId,
   ProjectId,
   ThreadId,
   TurnId,
@@ -22,6 +23,7 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     },
     runtimeMode: DEFAULT_RUNTIME_MODE,
     interactionMode: DEFAULT_INTERACTION_MODE,
+    autoContinueStatus: null,
     session: null,
     messages: [],
     turnDiffSummaries: [],
@@ -69,6 +71,7 @@ function makeReadModelThread(overrides: Partial<OrchestrationReadModel["threads"
     interactionMode: DEFAULT_INTERACTION_MODE,
     branch: null,
     worktreePath: null,
+    autoContinueStatus: null,
     latestTurn: null,
     createdAt: "2026-02-27T00:00:00.000Z",
     updatedAt: "2026-02-27T00:00:00.000Z",
@@ -328,5 +331,34 @@ describe("store read model sync", () => {
     const next = syncServerReadModel(initialState, readModel);
 
     expect(next.projects.map((project) => project.id)).toEqual([project2, project1, project3]);
+  });
+
+  it("stores server-computed auto-continue status snapshots", () => {
+    const initialState = makeState(makeThread());
+    const readModel = makeReadModel(
+      makeReadModelThread({
+        autoContinueStatus: {
+          startedAt: "2026-02-27T00:00:00.000Z",
+          dispatchAt: "2026-02-27T00:03:00.000Z",
+          assistantMessageId: MessageId.makeUnsafe("assistant-message-1"),
+          blockedBy: null,
+          sentCount: 1,
+          nextMessageIndex: 0,
+          nextMessageText: "keep going",
+        },
+      }),
+    );
+
+    const next = syncServerReadModel(initialState, readModel);
+
+    expect(next.threads[0]?.autoContinueStatus).toEqual({
+      startedAt: "2026-02-27T00:00:00.000Z",
+      dispatchAt: "2026-02-27T00:03:00.000Z",
+      assistantMessageId: "assistant-message-1",
+      blockedBy: null,
+      sentCount: 1,
+      nextMessageIndex: 0,
+      nextMessageText: "keep going",
+    });
   });
 });

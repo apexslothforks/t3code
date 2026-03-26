@@ -12,6 +12,8 @@ import {
   ThreadId,
   TurnId,
   type OrchestrationCheckpointSummary,
+  type OrchestrationAutoContinueBlockedBy,
+  type OrchestrationAutoContinueStatus,
   type OrchestrationLatestTurn,
   type OrchestrationMessage,
   type OrchestrationProposedPlan,
@@ -23,6 +25,19 @@ import {
   ThreadAutoContinueSettings,
   ThreadDelayedSend,
 } from "@t3tools/contracts";
+import {
+  findLatestAutoContinueDelayResetActivity,
+  findLatestAutoContinueSentActivity,
+  getAutoContinueDelayAnchorAtMs,
+  getAutoContinueDispatchAtMs,
+  hasAutoContinueTriggeredForAssistantMessage,
+  normalizeAutoContinueSettings,
+  shouldStopAutoContinueWithHeuristic,
+} from "@t3tools/shared/autoContinue";
+import {
+  derivePendingApprovals,
+  derivePendingUserInputs,
+} from "@t3tools/shared/threadInteractions";
 import { Effect, Layer, Schema, Struct } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
@@ -127,6 +142,155 @@ function maxIso(left: string | null, right: string): string {
     return right;
   }
   return left > right ? left : right;
+}
+
+function compareMessagesByOrder(
+  left: Pick<OrchestrationMessage, "createdAt" | "id">,
+  right: Pick<OrchestrationMessage, "createdAt" | "id">,
+): number {
+  return left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id);
+}
+
+function findLatestCompletedAssistantMessage(
+  messages: ReadonlyArray<OrchestrationMessage>,
+): (OrchestrationMessage & { updatedAt: string }) | null {
+  const latestMessage = [...messages]
+    .filter((message) => message.role !== "system")
+    .toSorted(compareMessagesByOrder)
+    .at(-1);
+  if (!latestMessage || latestMessage.role !== "assistant" || latestMessage.streaming) {
+    return null;
+  }
+  return latestMessage;
+}
+
+function deriveAutoContinueTriggerCount(input: {
+  messages: ReadonlyArray<OrchestrationMessage>;
+  activities: ReadonlyArray<OrchestrationThreadActivity>;
+}): number {
+  const autoActivities = input.activities
+    .filter((activity) => activity.kind === "auto-continue.sent")
+    .toSorted(
+      (left, right) =>
+        left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id),
+    );
+  if (autoActivities.length === 0) {
+    return 0;
+  }
+
+  const autoMessageIds = new Set(
+    autoActivities
+      .map((activity) => {
+        if (!activity.payload || typeof activity.payload !== "object") {
+          return null;
+        }
+        const payload = activity.payload as Record<string, unknown>;
+        return typeof payload.messageId === "string" ? payload.messageId : null;
+      })
+      .filter((messageId): messageId is string => messageId !== null),
+  );
+  const messageById = new Map(
+    input.messages.map((message) => [String(message.id), message] as const),
+  );
+  const lastHumanMessage = input.messages
+    .filter((message) => message.role === "user" && !autoMessageIds.has(String(message.id)))
+    .toSorted(compareMessagesByOrder)
+    .at(-1);
+
+  if (!lastHumanMessage) {
+    return autoActivities.length;
+  }
+
+  return autoActivities.filter((activity) => {
+    if (activity.createdAt > lastHumanMessage.createdAt) {
+      return true;
+    }
+    if (activity.createdAt < lastHumanMessage.createdAt) {
+      return false;
+    }
+
+    if (!activity.payload || typeof activity.payload !== "object") {
+      return false;
+    }
+    const payload = activity.payload as Record<string, unknown>;
+    const autoMessageId = typeof payload.messageId === "string" ? payload.messageId : null;
+    const autoMessage = autoMessageId ? messageById.get(autoMessageId) : undefined;
+    return autoMessage ? compareMessagesByOrder(autoMessage, lastHumanMessage) > 0 : false;
+  }).length;
+}
+
+function deriveThreadAutoContinueStatus(
+  input: Pick<OrchestrationThread, "messages" | "activities" | "autoContinue" | "session">,
+): OrchestrationAutoContinueStatus | null {
+  const settings = normalizeAutoContinueSettings(input.autoContinue);
+  if (!settings.enabled || settings.messages.length === 0) {
+    return null;
+  }
+  if (input.session?.activeTurnId != null || input.session?.status === "running") {
+    return null;
+  }
+
+  const blockedBy: OrchestrationAutoContinueBlockedBy =
+    derivePendingApprovals(input.activities).length > 0
+      ? "approval"
+      : derivePendingUserInputs(input.activities).length > 0
+        ? "user-input"
+        : null;
+
+  const latestAssistantMessage = findLatestCompletedAssistantMessage(input.messages);
+  if (!latestAssistantMessage) {
+    return null;
+  }
+  if (hasAutoContinueTriggeredForAssistantMessage(input.activities, latestAssistantMessage.id)) {
+    return null;
+  }
+  if (
+    shouldStopAutoContinueWithHeuristic({
+      messages: input.messages,
+      activities: input.activities,
+      assistantMessageId: latestAssistantMessage.id,
+      completedAt: latestAssistantMessage.updatedAt,
+      settings,
+    })
+  ) {
+    return null;
+  }
+
+  const sentCount = deriveAutoContinueTriggerCount({
+    messages: input.messages,
+    activities: input.activities,
+  });
+  const nextMessageIndex = sentCount % settings.messages.length;
+  const nextMessageText = settings.messages[nextMessageIndex];
+  if (!nextMessageText) {
+    return null;
+  }
+
+  const delayResetAt = findLatestAutoContinueDelayResetActivity(input.activities)?.createdAt;
+  const dispatchAtMs = getAutoContinueDispatchAtMs({
+    completedAt: latestAssistantMessage.updatedAt,
+    lastAutoContinueSentAt: findLatestAutoContinueSentActivity(input.activities)?.createdAt,
+    delayResetAt,
+    settings,
+  });
+  if (!Number.isFinite(dispatchAtMs)) {
+    return null;
+  }
+
+  const startedAtMs = getAutoContinueDelayAnchorAtMs({
+    completedAt: latestAssistantMessage.updatedAt,
+    delayResetAt,
+  });
+
+  return {
+    startedAt: new Date(startedAtMs).toISOString(),
+    dispatchAt: new Date(dispatchAtMs).toISOString(),
+    assistantMessageId: latestAssistantMessage.id,
+    blockedBy,
+    sentCount,
+    nextMessageIndex,
+    nextMessageText,
+  };
 }
 
 function computeSnapshotSequence(
@@ -630,6 +794,11 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
 
           const threads: ReadonlyArray<OrchestrationThread> = threadRows.map((row) => {
             const delayedSend = delayedSendByThread.get(row.threadId);
+            const messages = messagesByThread.get(row.threadId) ?? [];
+            const proposedPlans = proposedPlansByThread.get(row.threadId) ?? [];
+            const activities = activitiesByThread.get(row.threadId) ?? [];
+            const checkpoints = checkpointsByThread.get(row.threadId) ?? [];
+            const session = sessionsByThread.get(row.threadId) ?? null;
             const thread: OrchestrationThread = {
               id: row.threadId,
               projectId: row.projectId,
@@ -640,15 +809,21 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               branch: row.branch,
               worktreePath: row.worktreePath,
               autoContinue: row.autoContinue,
+              autoContinueStatus: deriveThreadAutoContinueStatus({
+                messages,
+                activities,
+                autoContinue: row.autoContinue,
+                session,
+              }),
               latestTurn: latestTurnByThread.get(row.threadId) ?? null,
               createdAt: row.createdAt,
               updatedAt: row.updatedAt,
               deletedAt: row.deletedAt,
-              messages: messagesByThread.get(row.threadId) ?? [],
-              proposedPlans: proposedPlansByThread.get(row.threadId) ?? [],
-              activities: activitiesByThread.get(row.threadId) ?? [],
-              checkpoints: checkpointsByThread.get(row.threadId) ?? [],
-              session: sessionsByThread.get(row.threadId) ?? null,
+              messages,
+              proposedPlans,
+              activities,
+              checkpoints,
+              session,
             };
             if (delayedSend) {
               Object.assign(thread, { delayedSend });

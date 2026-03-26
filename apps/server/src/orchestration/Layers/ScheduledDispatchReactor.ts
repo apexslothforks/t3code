@@ -799,10 +799,7 @@ const make = Effect.gen(function* () {
 
     yield* Effect.forkScoped(
       Effect.forever(
-        Queue.take(queue).pipe(
-          Effect.flatMap((signal) => processSignal(queue, signal)),
-          Effect.catch(() => Effect.void),
-        ),
+        Queue.take(queue).pipe(Effect.flatMap((signal) => processSignal(queue, signal))),
       ),
     );
 

@@ -1,6 +1,6 @@
 ---
 id: t3c-cabm
-status: open
+status: closed
 deps: [t3c-a1po, t3c-4itk]
 links: []
 created: 2026-03-26T17:13:34Z

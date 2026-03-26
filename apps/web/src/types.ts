@@ -1,6 +1,7 @@
 import type {
   ModelSelection,
   OrchestrationLatestTurn,
+  OrchestrationAutoContinueStatus,
   OrchestrationProposedPlanId,
   OrchestrationSessionStatus,
   OrchestrationThreadActivity,
@@ -103,6 +104,7 @@ export interface Thread {
   runtimeMode: RuntimeMode;
   interactionMode: ProviderInteractionMode;
   autoContinue?: ThreadAutoContinueSettings | undefined;
+  autoContinueStatus: OrchestrationAutoContinueStatus | null;
   session: ThreadSession | null;
   messages: ChatMessage[];
   proposedPlans: ProposedPlan[];

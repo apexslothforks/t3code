@@ -28,6 +28,7 @@ export function buildLocalDraftThread(
     title: "New thread",
     modelSelection: fallbackModelSelection,
     autoContinue: normalizeAutoContinueSettings(draftThread.autoContinue),
+    autoContinueStatus: null,
     runtimeMode: draftThread.runtimeMode,
     interactionMode: draftThread.interactionMode,
     session: null,

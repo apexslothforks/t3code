@@ -1,6 +1,6 @@
 ---
 id: t3c-6u6r
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-03-26T17:11:30Z

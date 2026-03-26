@@ -89,6 +89,7 @@ describe("orchestration projector", () => {
           cooldownMinutes: 5,
           stopWithHeuristic: false,
         },
+        autoContinueStatus: null,
         delayedSend: null,
         branch: null,
         worktreePath: null,

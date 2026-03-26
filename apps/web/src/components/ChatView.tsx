@@ -321,15 +321,6 @@ export default function ChatView({ threadId }: ChatViewProps) {
     (store) => store.draftThreadsByThreadId[threadId] ?? null,
   );
   const promptRef = useRef(prompt);
-  const automationSettingsByThreadIdRef = useRef<
-    Map<ThreadId, ReturnType<typeof normalizeAutoContinueSettings>>
-  >(new Map());
-  const automationDelayResetByThreadIdRef = useRef<
-    Map<
-      ThreadId,
-      { settingsKey: string; resetAtMs?: number; ignoredAssistantMessageId?: MessageId }
-    >
-  >(new Map());
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [automationPanelOpen, setAutomationPanelOpen] = useState(false);
   const [automationPanelDefaultTab, setAutomationPanelDefaultTab] =
@@ -510,45 +501,12 @@ export default function ChatView({ threadId }: ChatViewProps) {
     () => normalizeAutoContinueSettings(activeThread?.autoContinue),
     [activeThread?.autoContinue],
   );
-  useEffect(() => {
-    if (!activeThread) {
-      return;
-    }
-    const settingsKey = JSON.stringify(normalizedAutoContinue);
-    const previous = automationDelayResetByThreadIdRef.current.get(activeThread.id);
-    if (!previous) {
-      automationDelayResetByThreadIdRef.current.set(activeThread.id, { settingsKey });
-      return;
-    }
-    if (previous.settingsKey === settingsKey) {
-      return;
-    }
-    const latestAutomationAnchorMessage = [...activeThread.messages]
-      .filter((message) => message.role !== "system")
-      .toSorted(
-        (left, right) =>
-          left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id),
-      )
-      .at(-1);
-    automationDelayResetByThreadIdRef.current.set(activeThread.id, {
-      settingsKey,
-      resetAtMs: Date.now(),
-      ...(latestAutomationAnchorMessage?.role === "assistant"
-        ? { ignoredAssistantMessageId: latestAutomationAnchorMessage.id }
-        : {}),
-    });
-  }, [activeThread, normalizedAutoContinue]);
   const activeAutomationStatus = useMemo(
     () =>
       activeThread
         ? deriveAutoContinueStatusSnapshot({
-            thread: activeThread,
+            status: activeThread.autoContinueStatus,
             nowMs: nowTick,
-            localDelayResetAtMs: automationDelayResetByThreadIdRef.current.get(activeThread.id)
-              ?.resetAtMs,
-            ignoredAssistantMessageId: automationDelayResetByThreadIdRef.current.get(
-              activeThread.id,
-            )?.ignoredAssistantMessageId,
           })
         : null,
     [activeThread, nowTick],
@@ -2822,7 +2780,6 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const applyAutomationSettings = useCallback(
     async (nextAutoContinue: typeof normalizedAutoContinue) => {
       if (isLocalDraftThread) {
-        automationSettingsByThreadIdRef.current.set(threadId, nextAutoContinue);
         setDraftThreadContext(threadId, { autoContinue: nextAutoContinue });
         return;
       }
@@ -2833,7 +2790,6 @@ export default function ChatView({ threadId }: ChatViewProps) {
       if (!api) {
         throw new Error("Unable to reach the orchestration API.");
       }
-      automationSettingsByThreadIdRef.current.set(threadId, nextAutoContinue);
       await api.orchestration.dispatchCommand({
         type: "thread.auto-continue.set",
         commandId: newCommandId(),

@@ -300,6 +300,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             delayMinutes: 3,
             cooldownMinutes: 5,
           },
+          autoContinueStatus: null,
           delayedSend: {
             threadId: ThreadId.makeUnsafe("thread-1"),
             messageId: asMessageId("message-scheduled-1"),
@@ -392,6 +393,149 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           createdAt: "2026-02-24T00:00:03.500Z",
         },
       ]);
+    }),
+  );
+
+  it.effect("computes server-driven auto-continue status in the snapshot", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+
+      yield* sql`DELETE FROM projection_projects`;
+      yield* sql`DELETE FROM projection_threads`;
+      yield* sql`DELETE FROM projection_thread_messages`;
+      yield* sql`DELETE FROM projection_thread_activities`;
+      yield* sql`DELETE FROM projection_thread_sessions`;
+      yield* sql`DELETE FROM projection_delayed_sends`;
+      yield* sql`DELETE FROM projection_thread_proposed_plans`;
+      yield* sql`DELETE FROM projection_turns`;
+      yield* sql`DELETE FROM projection_state`;
+
+      yield* sql`
+        INSERT INTO projection_projects (
+          project_id,
+          title,
+          workspace_root,
+          default_model_selection_json,
+          scripts_json,
+          created_at,
+          updated_at,
+          deleted_at
+        )
+        VALUES (
+          'project-1',
+          'Project 1',
+          '/tmp/project-1',
+          '{"provider":"codex","model":"gpt-5-codex"}',
+          '[]',
+          '2026-02-24T00:00:00.000Z',
+          '2026-02-24T00:00:01.000Z',
+          NULL
+        )
+      `;
+
+      yield* sql`
+        INSERT INTO projection_threads (
+          thread_id,
+          project_id,
+          title,
+          model_selection_json,
+          auto_continue_json,
+          branch,
+          worktree_path,
+          latest_turn_id,
+          created_at,
+          updated_at,
+          deleted_at
+        )
+        VALUES (
+          'thread-1',
+          'project-1',
+          'Thread 1',
+          '{"provider":"codex","model":"gpt-5-codex"}',
+          '{"enabled":true,"messages":["keep going"],"stopWithHeuristic":false,"delayMinutes":3,"cooldownMinutes":5}',
+          NULL,
+          NULL,
+          NULL,
+          '2026-02-24T00:00:02.000Z',
+          '2026-02-24T00:00:03.000Z',
+          NULL
+        )
+      `;
+
+      yield* sql`
+        INSERT INTO projection_thread_messages (
+          message_id,
+          thread_id,
+          turn_id,
+          role,
+          text,
+          is_streaming,
+          created_at,
+          updated_at
+        )
+        VALUES (
+          'message-1',
+          'thread-1',
+          'turn-1',
+          'assistant',
+          'hello from projection',
+          0,
+          '2026-02-24T00:00:04.000Z',
+          '2026-02-24T00:00:05.000Z'
+        )
+      `;
+
+      yield* sql`
+        INSERT INTO projection_thread_activities (
+          activity_id,
+          thread_id,
+          turn_id,
+          tone,
+          kind,
+          summary,
+          payload_json,
+          created_at
+        )
+        VALUES (
+          'activity-1',
+          'thread-1',
+          'turn-1',
+          'info',
+          'approval.requested',
+          'approval pending',
+          '{"requestId":"req-1","requestKind":"command"}',
+          '2026-02-24T00:00:06.000Z'
+        )
+      `;
+
+      let sequence = 5;
+      for (const projector of Object.values(ORCHESTRATION_PROJECTOR_NAMES)) {
+        yield* sql`
+          INSERT INTO projection_state (
+            projector,
+            last_applied_sequence,
+            updated_at
+          )
+          VALUES (
+            ${projector},
+            ${sequence},
+            '2026-02-24T00:00:09.000Z'
+          )
+        `;
+        sequence += 1;
+      }
+
+      const snapshot = yield* snapshotQuery.getSnapshot();
+      assert.deepEqual(snapshot.threads[0]?.autoContinueStatus, {
+        startedAt: "2026-02-24T00:00:05.000Z",
+        dispatchAt: "2026-02-24T00:03:05.000Z",
+        assistantMessageId: asMessageId("message-1"),
+        blockedBy: "approval",
+        sentCount: 0,
+        nextMessageIndex: 0,
+        nextMessageText: "keep going",
+      });
     }),
   );
 });
