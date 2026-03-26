@@ -28,6 +28,11 @@
       "types": "./src/threadInteractions.ts",
       "import": "./src/threadInteractions.ts"
     },
+    "./threadDispatch": {
+      "types": "./src/threadDispatch.ts",
+      "import": "./src/threadDispatch.ts",
+      "default": "./src/threadDispatch.ts"
+    },
     "./Net": {
       "types": "./src/Net.ts",
       "import": "./src/Net.ts"

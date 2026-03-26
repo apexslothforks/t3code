@@ -87,7 +87,9 @@ describe("orchestration projector", () => {
           messages: [],
           delayMinutes: 3,
           cooldownMinutes: 5,
+          stopWithHeuristic: false,
         },
+        delayedSend: null,
         branch: null,
         worktreePath: null,
         latestTurn: null,
@@ -119,7 +121,10 @@ describe("orchestration projector", () => {
             threadId: "thread-1",
             projectId: "project-1",
             title: "demo",
-            model: "gpt-5-codex",
+            modelSelection: {
+              provider: "codex",
+              model: "gpt-5-codex",
+            },
             runtimeMode: "full-access",
             branch: null,
             worktreePath: null,
@@ -159,7 +164,97 @@ describe("orchestration projector", () => {
       messages: ["go on", "keep going"],
       delayMinutes: 4,
       cooldownMinutes: 8,
+      stopWithHeuristic: false,
     });
+  });
+
+  it("tracks delayed-send lifecycle in the thread projection", async () => {
+    const now = new Date().toISOString();
+    const created = await Effect.runPromise(
+      projectEvent(
+        createEmptyReadModel(now),
+        makeEvent({
+          sequence: 1,
+          type: "thread.created",
+          aggregateKind: "thread",
+          aggregateId: "thread-1",
+          occurredAt: now,
+          commandId: "cmd-thread-create",
+          payload: {
+            threadId: "thread-1",
+            projectId: "project-1",
+            title: "demo",
+            modelSelection: {
+              provider: "codex",
+              model: "gpt-5-codex",
+            },
+            runtimeMode: "full-access",
+            branch: null,
+            worktreePath: null,
+            createdAt: now,
+            updatedAt: now,
+          },
+        }),
+      ),
+    );
+
+    const scheduled = await Effect.runPromise(
+      projectEvent(
+        created,
+        makeEvent({
+          sequence: 2,
+          type: "thread.delayed-send-scheduled",
+          aggregateKind: "thread",
+          aggregateId: "thread-1",
+          occurredAt: "2026-03-08T10:05:00.000Z",
+          commandId: "cmd-thread-delayed-send-scheduled",
+          payload: {
+            threadId: "thread-1",
+            messageId: "message-1",
+            text: "later",
+            attachments: [],
+            dueAt: "2026-03-08T10:10:00.000Z",
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            createdAt: "2026-03-08T10:05:00.000Z",
+          },
+        }),
+      ),
+    );
+
+    expect(scheduled.threads[0]?.delayedSend).toMatchObject({
+      threadId: "thread-1",
+      messageId: "message-1",
+      text: "later",
+    });
+    expect(scheduled.delayedSends).toHaveLength(1);
+
+    const dispatched = await Effect.runPromise(
+      projectEvent(
+        scheduled,
+        makeEvent({
+          sequence: 3,
+          type: "thread.delayed-send-dispatched",
+          aggregateKind: "thread",
+          aggregateId: "thread-1",
+          occurredAt: "2026-03-08T10:10:00.000Z",
+          commandId: "cmd-thread-delayed-send-dispatched",
+          payload: {
+            threadId: "thread-1",
+            messageId: "message-1",
+            text: "later",
+            attachments: [],
+            dueAt: "2026-03-08T10:10:00.000Z",
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            createdAt: "2026-03-08T10:05:00.000Z",
+          },
+        }),
+      ),
+    );
+
+    expect(dispatched.threads[0]?.delayedSend).toBeNull();
+    expect(dispatched.delayedSends).toEqual([]);
   });
 
   it("fails when event payload cannot be decoded by runtime schema", async () => {

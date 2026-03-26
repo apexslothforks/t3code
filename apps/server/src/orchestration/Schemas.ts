@@ -7,6 +7,10 @@ import {
   ThreadRuntimeModeSetPayload as ContractsThreadRuntimeModeSetPayloadSchema,
   ThreadInteractionModeSetPayload as ContractsThreadInteractionModeSetPayloadSchema,
   ThreadAutoContinueSetPayload as ContractsThreadAutoContinueSetPayloadSchema,
+  ThreadDelayedSend as ContractsThreadDelayedSendSchema,
+  ThreadDelayedSendCancelledPayload as ContractsThreadDelayedSendCancelledPayloadSchema,
+  ThreadDelayedSendDispatchedPayload as ContractsThreadDelayedSendDispatchedPayloadSchema,
+  ThreadDelayedSendScheduledPayload as ContractsThreadDelayedSendScheduledPayloadSchema,
   ThreadDeletedPayload as ContractsThreadDeletedPayloadSchema,
   ThreadMessageSentPayload as ContractsThreadMessageSentPayloadSchema,
   ThreadProposedPlanUpsertedPayload as ContractsThreadProposedPlanUpsertedPayloadSchema,
@@ -31,6 +35,10 @@ export const ThreadMetaUpdatedPayload = ContractsThreadMetaUpdatedPayloadSchema;
 export const ThreadRuntimeModeSetPayload = ContractsThreadRuntimeModeSetPayloadSchema;
 export const ThreadInteractionModeSetPayload = ContractsThreadInteractionModeSetPayloadSchema;
 export const ThreadAutoContinueSetPayload = ContractsThreadAutoContinueSetPayloadSchema;
+export const ThreadDelayedSend = ContractsThreadDelayedSendSchema;
+export const ThreadDelayedSendScheduledPayload = ContractsThreadDelayedSendScheduledPayloadSchema;
+export const ThreadDelayedSendCancelledPayload = ContractsThreadDelayedSendCancelledPayloadSchema;
+export const ThreadDelayedSendDispatchedPayload = ContractsThreadDelayedSendDispatchedPayloadSchema;
 export const ThreadDeletedPayload = ContractsThreadDeletedPayloadSchema;
 
 export const MessageSentPayloadSchema = ContractsThreadMessageSentPayloadSchema;

@@ -27,11 +27,7 @@ describe("isThreadReadyForDispatch", () => {
     expect(
       isThreadReadyForDispatch({
         session: {
-          provider: "codex",
-          status: "error",
           orchestrationStatus: "error",
-          createdAt: "2026-03-13T00:00:00.000Z",
-          updatedAt: "2026-03-13T00:00:00.000Z",
         },
         activities: [],
       }),
@@ -42,12 +38,8 @@ describe("isThreadReadyForDispatch", () => {
     expect(
       isThreadReadyForDispatch({
         session: {
-          provider: "codex",
-          status: "ready",
           orchestrationStatus: "ready",
-          activeTurnId: null as never,
-          createdAt: "2026-03-13T00:00:00.000Z",
-          updatedAt: "2026-03-13T00:00:00.000Z",
+          activeTurnId: null,
         },
         activities: [],
       }),

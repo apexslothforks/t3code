@@ -3,6 +3,7 @@ import type {
   OrchestrationEvent,
   OrchestrationReadModel,
 } from "@t3tools/contracts";
+import { EventId } from "@t3tools/contracts";
 import { Effect } from "effect";
 
 import { OrchestrationCommandInvariantError } from "./Errors.ts";
@@ -44,6 +45,65 @@ function withEventBase(
     correlationId: input.commandId,
     metadata: input.metadata ?? {},
   };
+}
+
+const delayedSendsForReadModel = (readModel: OrchestrationReadModel) =>
+  readModel.delayedSends ?? [];
+
+const findDelayedSendByThreadId = (readModel: OrchestrationReadModel, threadId: string) =>
+  delayedSendsForReadModel(readModel).find((entry) => entry.threadId === threadId);
+
+function buildThreadTurnStartEvents(input: {
+  readonly command: Pick<
+    Extract<OrchestrationCommand, { type: "thread.turn.start" }>,
+    "commandId" | "threadId" | "createdAt" | "message" | "modelSelection" | "sourceProposedPlan"
+  >;
+  readonly targetThread: OrchestrationReadModel["threads"][number];
+}): readonly [Omit<OrchestrationEvent, "sequence">, Omit<OrchestrationEvent, "sequence">] {
+  const userMessageEvent: Omit<OrchestrationEvent, "sequence"> = {
+    ...withEventBase({
+      aggregateKind: "thread",
+      aggregateId: input.command.threadId,
+      occurredAt: input.command.createdAt,
+      commandId: input.command.commandId,
+    }),
+    type: "thread.message-sent",
+    payload: {
+      threadId: input.command.threadId,
+      messageId: input.command.message.messageId,
+      role: "user",
+      text: input.command.message.text,
+      attachments: input.command.message.attachments,
+      turnId: null,
+      streaming: false,
+      createdAt: input.command.createdAt,
+      updatedAt: input.command.createdAt,
+    },
+  };
+  const turnStartRequestedEvent: Omit<OrchestrationEvent, "sequence"> = {
+    ...withEventBase({
+      aggregateKind: "thread",
+      aggregateId: input.command.threadId,
+      occurredAt: input.command.createdAt,
+      commandId: input.command.commandId,
+    }),
+    causationEventId: userMessageEvent.eventId,
+    type: "thread.turn-start-requested",
+    payload: {
+      threadId: input.command.threadId,
+      messageId: input.command.message.messageId,
+      ...(input.command.modelSelection !== undefined
+        ? { modelSelection: input.command.modelSelection }
+        : {}),
+      runtimeMode: input.targetThread.runtimeMode,
+      interactionMode: input.targetThread.interactionMode,
+      ...(input.command.sourceProposedPlan !== undefined
+        ? { sourceProposedPlan: input.command.sourceProposedPlan }
+        : {}),
+      createdAt: input.command.createdAt,
+    },
+  };
+  return [userMessageEvent, turnStartRequestedEvent];
 }
 
 export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand")(function* ({
@@ -162,6 +222,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           interactionMode: command.interactionMode,
           branch: command.branch,
           worktreePath: command.worktreePath,
+          autoContinue: command.autoContinue,
           createdAt: command.createdAt,
           updatedAt: command.createdAt,
         },
@@ -294,48 +355,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: `Proposed plan '${sourceProposedPlan?.planId}' belongs to thread '${sourceThread.id}' in a different project.`,
         });
       }
-      const userMessageEvent: Omit<OrchestrationEvent, "sequence"> = {
-        ...withEventBase({
-          aggregateKind: "thread",
-          aggregateId: command.threadId,
-          occurredAt: command.createdAt,
-          commandId: command.commandId,
-        }),
-        type: "thread.message-sent",
-        payload: {
-          threadId: command.threadId,
-          messageId: command.message.messageId,
-          role: "user",
-          text: command.message.text,
-          attachments: command.message.attachments,
-          turnId: null,
-          streaming: false,
-          createdAt: command.createdAt,
-          updatedAt: command.createdAt,
-        },
-      };
-      const turnStartRequestedEvent: Omit<OrchestrationEvent, "sequence"> = {
-        ...withEventBase({
-          aggregateKind: "thread",
-          aggregateId: command.threadId,
-          occurredAt: command.createdAt,
-          commandId: command.commandId,
-        }),
-        causationEventId: userMessageEvent.eventId,
-        type: "thread.turn-start-requested",
-        payload: {
-          threadId: command.threadId,
-          messageId: command.message.messageId,
-          ...(command.modelSelection !== undefined
-            ? { modelSelection: command.modelSelection }
-            : {}),
-          runtimeMode: targetThread.runtimeMode,
-          interactionMode: targetThread.interactionMode,
-          ...(sourceProposedPlan !== undefined ? { sourceProposedPlan } : {}),
-          createdAt: command.createdAt,
-        },
-      };
-      return [userMessageEvent, turnStartRequestedEvent];
+      return buildThreadTurnStartEvents({
+        command,
+        targetThread,
+      });
     }
 
     case "thread.turn.interrupt": {
@@ -651,6 +674,185 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           updatedAt: occurredAt,
         },
       };
+    }
+
+    case "thread.delayed-send.schedule": {
+      if (command.createThread === undefined) {
+        yield* requireThread({
+          readModel,
+          command,
+          threadId: command.threadId,
+        });
+      } else {
+        yield* requireProject({
+          readModel,
+          command,
+          projectId: command.createThread.projectId,
+        });
+      }
+      return {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.delayed-send-scheduled",
+        payload: {
+          threadId: command.threadId,
+          messageId: command.messageId,
+          text: command.text,
+          attachments: command.attachments,
+          dueAt: command.dueAt,
+          ...(command.modelSelection !== undefined
+            ? { modelSelection: command.modelSelection }
+            : {}),
+          runtimeMode: command.runtimeMode,
+          interactionMode: command.interactionMode,
+          ...(command.createThread !== undefined ? { createThread: command.createThread } : {}),
+          createdAt: command.createdAt,
+        },
+      };
+    }
+
+    case "thread.delayed-send.cancel": {
+      const delayedSend = findDelayedSendByThreadId(readModel, command.threadId);
+      if (!delayedSend) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Thread '${command.threadId}' does not have a scheduled delayed send.`,
+        });
+      }
+      return {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.delayed-send-cancelled",
+        payload: {
+          threadId: delayedSend.threadId,
+          createdAt: command.createdAt,
+        },
+      };
+    }
+
+    case "thread.delayed-send.dispatch": {
+      const delayedSend = findDelayedSendByThreadId(readModel, command.threadId);
+      if (!delayedSend) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Thread '${command.threadId}' does not have a scheduled delayed send.`,
+        });
+      }
+      const thread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const dispatchedEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.delayed-send-dispatched",
+        payload: delayedSend,
+      };
+      const [userMessageEvent, turnStartRequestedEvent] = buildThreadTurnStartEvents({
+        command: {
+          ...command,
+          message: {
+            messageId: delayedSend.messageId,
+            role: "user",
+            text: delayedSend.text,
+            attachments: delayedSend.attachments,
+          },
+          ...(delayedSend.modelSelection !== undefined
+            ? { modelSelection: delayedSend.modelSelection }
+            : {}),
+        },
+        targetThread: thread,
+      });
+      const activityEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        causationEventId: turnStartRequestedEvent.eventId,
+        type: "thread.activity-appended",
+        payload: {
+          threadId: command.threadId,
+          activity: {
+            id: EventId.makeUnsafe(crypto.randomUUID()),
+            tone: "info",
+            kind: "delayed-send.dispatched",
+            summary: "Delayed send dispatched",
+            payload: {
+              messageId: delayedSend.messageId,
+              dueAt: delayedSend.dueAt,
+            },
+            turnId: null,
+            createdAt: command.createdAt,
+          },
+        },
+      };
+      return [dispatchedEvent, userMessageEvent, turnStartRequestedEvent, activityEvent];
+    }
+
+    case "thread.auto-continue.trigger": {
+      const thread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const [userMessageEvent, turnStartRequestedEvent] = buildThreadTurnStartEvents({
+        command: {
+          ...command,
+          message: {
+            messageId: command.messageId,
+            role: "user",
+            text: command.text,
+            attachments: [],
+          },
+        },
+        targetThread: thread,
+      });
+      const activityEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        causationEventId: turnStartRequestedEvent.eventId,
+        type: "thread.activity-appended",
+        payload: {
+          threadId: command.threadId,
+          activity: {
+            id: EventId.makeUnsafe(crypto.randomUUID()),
+            tone: "info",
+            kind: "auto-continue.sent",
+            summary: "Auto-continue sent",
+            payload: {
+              triggeringAssistantMessageId: command.triggeringAssistantMessageId,
+              ...(command.triggeringTurnId !== undefined
+                ? { triggeringTurnId: command.triggeringTurnId }
+                : {}),
+              messageId: command.messageId,
+              messageText: command.text,
+              messageIndex: command.messageIndex,
+            },
+            turnId: command.triggeringTurnId ?? null,
+            createdAt: command.createdAt,
+          },
+        },
+      };
+      return [userMessageEvent, turnStartRequestedEvent, activityEvent];
     }
 
     default: {

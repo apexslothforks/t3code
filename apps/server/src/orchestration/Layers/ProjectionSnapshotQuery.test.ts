@@ -25,6 +25,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       const sql = yield* SqlClient.SqlClient;
 
       yield* sql`DELETE FROM projection_projects`;
+      yield* sql`DELETE FROM projection_delayed_sends`;
       yield* sql`DELETE FROM projection_state`;
       yield* sql`DELETE FROM projection_thread_proposed_plans`;
       yield* sql`DELETE FROM projection_turns`;
@@ -76,6 +77,33 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           '2026-02-24T00:00:02.000Z',
           '2026-02-24T00:00:03.000Z',
           NULL
+        )
+      `;
+
+      yield* sql`
+        INSERT INTO projection_delayed_sends (
+          thread_id,
+          message_id,
+          text,
+          attachments_json,
+          due_at,
+          model_selection_json,
+          runtime_mode,
+          interaction_mode,
+          create_thread_json,
+          created_at
+        )
+        VALUES (
+          'thread-1',
+          'message-scheduled-1',
+          'send later',
+          '[]',
+          '2026-02-24T00:10:00.000Z',
+          NULL,
+          'full-access',
+          'default',
+          NULL,
+          '2026-02-24T00:00:03.500Z'
         )
       `;
 
@@ -272,6 +300,16 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             delayMinutes: 3,
             cooldownMinutes: 5,
           },
+          delayedSend: {
+            threadId: ThreadId.makeUnsafe("thread-1"),
+            messageId: asMessageId("message-scheduled-1"),
+            text: "send later",
+            attachments: [],
+            dueAt: "2026-02-24T00:10:00.000Z",
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            createdAt: "2026-02-24T00:00:03.500Z",
+          },
           latestTurn: {
             turnId: asTurnId("turn-1"),
             state: "completed",
@@ -340,6 +378,18 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             lastError: null,
             updatedAt: "2026-02-24T00:00:07.000Z",
           },
+        },
+      ]);
+      assert.deepEqual(snapshot.delayedSends, [
+        {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          messageId: asMessageId("message-scheduled-1"),
+          text: "send later",
+          attachments: [],
+          dueAt: "2026-02-24T00:10:00.000Z",
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          createdAt: "2026-02-24T00:00:03.500Z",
         },
       ]);
     }),

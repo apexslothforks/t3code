@@ -48,7 +48,18 @@ interface AutomationTimerSnapshot {
 type SettingsResetState = {
   settingsKey: string;
   resetAtMs: number;
+  ignoredAssistantMessageId?: string;
 };
+
+export interface AutoContinueStatusSnapshot extends AutomationTimerSnapshot {
+  readonly remainingMs: number;
+  readonly elapsedMs: number;
+  readonly totalMs: number;
+  readonly progressRatio: number;
+  readonly sentCount: number;
+  readonly nextMessageIndex: number;
+  readonly nextMessageText: string;
+}
 
 export function resolveEffectiveAutoContinueDelayResetAt(input: {
   activityDelayResetAt?: string | null | undefined;
@@ -85,6 +96,25 @@ function extractAutoContinueMessageId(activity: Thread["activities"][number]): s
 
 function findLatestAssistantMessage(thread: Pick<Thread, "messages">, assistantMessageId: string) {
   return thread.messages.find((message) => message.id === assistantMessageId) ?? null;
+}
+
+function findLatestCompletedAssistantMessage(
+  messages: ReadonlyArray<ChatMessage>,
+): (ChatMessage & { completedAt: string }) | null {
+  const latestMessage = [...messages]
+    .filter((message) => message.role !== "system")
+    .toSorted(compareMessagesByOrder)
+    .at(-1);
+  if (!latestMessage || latestMessage.role !== "assistant") {
+    return null;
+  }
+  if (latestMessage.streaming || !latestMessage.completedAt) {
+    return null;
+  }
+  return {
+    ...latestMessage,
+    completedAt: latestMessage.completedAt,
+  };
 }
 
 function deriveAutoContinueTriggerCount(
@@ -136,6 +166,7 @@ function deriveAutomationTimerSnapshot(input: {
   session: Pick<ThreadSession, "orchestrationStatus" | "activeTurnId"> | null;
   autoContinue: Thread["autoContinue"];
   localDelayResetAtMs?: number | null | undefined;
+  ignoredAssistantMessageId?: string | null | undefined;
 }): AutomationTimerSnapshot | null {
   const settings = normalizeAutoContinueSettings(input.autoContinue);
   if (!settings.enabled || settings.messages.length === 0) {
@@ -155,14 +186,14 @@ function deriveAutomationTimerSnapshot(input: {
         ? "user-input"
         : null;
 
-  const latestAssistantMessage = [...input.messages]
-    .filter((message) => message.role !== "system")
-    .toSorted(compareMessagesByOrder)
-    .at(-1);
-  if (!latestAssistantMessage || latestAssistantMessage.role !== "assistant") {
+  const latestAssistantMessage = findLatestCompletedAssistantMessage(input.messages);
+  if (!latestAssistantMessage) {
     return null;
   }
-  if (latestAssistantMessage.streaming || !latestAssistantMessage.completedAt) {
+  if (
+    input.ignoredAssistantMessageId &&
+    latestAssistantMessage.id === input.ignoredAssistantMessageId
+  ) {
     return null;
   }
   if (hasAutoContinueTriggeredForAssistantMessage(input.activities, latestAssistantMessage.id)) {
@@ -224,6 +255,52 @@ function resolveAutoContinueMessage(input: {
   return { text, messageIndex };
 }
 
+export function deriveAutoContinueStatusSnapshot(input: {
+  thread: Pick<Thread, "messages" | "activities" | "autoContinue" | "session">;
+  nowMs: number;
+  localDelayResetAtMs?: number | null | undefined;
+  ignoredAssistantMessageId?: string | null | undefined;
+}): AutoContinueStatusSnapshot | null {
+  const timer = deriveAutomationTimerSnapshot({
+    messages: input.thread.messages,
+    activities: input.thread.activities,
+    session: input.thread.session,
+    autoContinue: input.thread.autoContinue,
+    localDelayResetAtMs: input.localDelayResetAtMs,
+    ignoredAssistantMessageId: input.ignoredAssistantMessageId,
+  });
+  if (!timer) {
+    return null;
+  }
+
+  const nextMessage = resolveAutoContinueMessage({ thread: input.thread });
+  if (!nextMessage) {
+    return null;
+  }
+
+  const startedAtMs = Date.parse(timer.startedAt);
+  const dispatchAtMs = Date.parse(timer.dispatchAt);
+  if (!Number.isFinite(startedAtMs) || !Number.isFinite(dispatchAtMs)) {
+    return null;
+  }
+
+  const totalMs = Math.max(0, dispatchAtMs - startedAtMs);
+  const elapsedMs = Math.min(Math.max(0, input.nowMs - startedAtMs), totalMs);
+  const remainingMs = Math.max(0, dispatchAtMs - input.nowMs);
+  const progressRatio = totalMs <= 0 ? 1 : Math.min(1, Math.max(0, elapsedMs / totalMs));
+
+  return {
+    ...timer,
+    remainingMs,
+    elapsedMs,
+    totalMs,
+    progressRatio,
+    sentCount: deriveAutoContinueTriggerCount(input.thread.messages, input.thread.activities),
+    nextMessageIndex: nextMessage.messageIndex,
+    nextMessageText: nextMessage.text,
+  };
+}
+
 export function AutoContinueRunner() {
   const settings = useSettings();
   const threads = useStore((state) => state.threads);
@@ -257,9 +334,13 @@ export function AutoContinueRunner() {
       const settingsKey = JSON.stringify(normalizedSettings);
       const previous = settingsResetRef.current.get(thread.id);
       if (!previous || previous.settingsKey !== settingsKey) {
+        const latestAssistantMessage = findLatestCompletedAssistantMessage(thread.messages);
         settingsResetRef.current.set(thread.id, {
           settingsKey,
           resetAtMs: nowMs,
+          ...(latestAssistantMessage
+            ? { ignoredAssistantMessageId: latestAssistantMessage.id }
+            : {}),
         });
       }
     }
@@ -297,6 +378,8 @@ export function AutoContinueRunner() {
               session: thread.session,
               autoContinue: thread.autoContinue,
               localDelayResetAtMs: settingsResetRef.current.get(thread.id)?.resetAtMs,
+              ignoredAssistantMessageId: settingsResetRef.current.get(thread.id)
+                ?.ignoredAssistantMessageId,
             });
             if (!timer) {
               retryStateRef.current.delete(thread.id);

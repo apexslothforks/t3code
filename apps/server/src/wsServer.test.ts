@@ -802,7 +802,10 @@ describe("WebSocket Server", () => {
       threadId: "thread-auto",
       projectId: "project-auto",
       title: "Auto Thread",
-      model: "gpt-5-codex",
+      modelSelection: {
+        provider: "codex",
+        model: "gpt-5-codex",
+      },
       runtimeMode: "full-access",
       interactionMode: "default",
       branch: null,
@@ -854,6 +857,7 @@ describe("WebSocket Server", () => {
             messages: ["go on", "keep going"],
             delayMinutes: 4,
             cooldownMinutes: 9,
+            stopWithHeuristic: false,
           },
         }),
       ]),
@@ -964,6 +968,7 @@ describe("WebSocket Server", () => {
       providers: defaultProviderStatuses,
       availableEditors: expect.any(Array),
       settings: defaultServerSettings,
+      activeProviderSessions: [],
     });
     expectAvailableEditors((response.result as { availableEditors: unknown }).availableEditors);
   });
@@ -1050,6 +1055,7 @@ describe("WebSocket Server", () => {
       providers: defaultProviderStatuses,
       availableEditors: expect.any(Array),
       settings: defaultServerSettings,
+      activeProviderSessions: [],
     });
     expectAvailableEditors((response.result as { availableEditors: unknown }).availableEditors);
 
@@ -1087,6 +1093,7 @@ describe("WebSocket Server", () => {
       providers: defaultProviderStatuses,
       availableEditors: expect.any(Array),
       settings: defaultServerSettings,
+      activeProviderSessions: [],
     });
     expectAvailableEditors((response.result as { availableEditors: unknown }).availableEditors);
     expect(fs.readFileSync(keybindingsPath, "utf8")).toBe("{ not-json");
@@ -1237,6 +1244,7 @@ describe("WebSocket Server", () => {
       providers: defaultProviderStatuses,
       availableEditors: expect.any(Array),
       settings: defaultServerSettings,
+      activeProviderSessions: [],
     });
     expectAvailableEditors((response.result as { availableEditors: unknown }).availableEditors);
   });
@@ -1286,6 +1294,7 @@ describe("WebSocket Server", () => {
       providers: defaultProviderStatuses,
       availableEditors: expect.any(Array),
       settings: defaultServerSettings,
+      activeProviderSessions: [],
     });
     expectAvailableEditors(
       (configResponse.result as { availableEditors: unknown }).availableEditors,

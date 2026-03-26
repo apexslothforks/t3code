@@ -21,6 +21,7 @@ import {
   type OrchestrationThreadActivity,
   ModelSelection,
   ThreadAutoContinueSettings,
+  ThreadDelayedSend,
 } from "@t3tools/contracts";
 import { Effect, Layer, Schema, Struct } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -73,6 +74,19 @@ const ProjectionThreadDbRowSchema = ProjectionThread.mapFields(
     autoContinue: Schema.fromJsonString(ThreadAutoContinueSettings),
   }),
 );
+const ProjectionDelayedSendDbRowSchema = Schema.Struct({
+  threadId: ThreadId,
+  messageId: MessageId,
+  text: Schema.String,
+  attachments: Schema.fromJsonString(Schema.Array(ChatAttachment)),
+  dueAt: IsoDateTime,
+  modelSelection: Schema.NullOr(Schema.fromJsonString(ModelSelection)),
+  runtimeMode: ThreadDelayedSend.fields.runtimeMode,
+  interactionMode: ThreadDelayedSend.fields.interactionMode,
+  createThread: Schema.NullOr(Schema.fromJsonString(Schema.Unknown)),
+  createdAt: IsoDateTime,
+});
+type ProjectionDelayedSendDbRow = typeof ProjectionDelayedSendDbRowSchema.Type;
 const ProjectionThreadActivityDbRowSchema = ProjectionThreadActivity.mapFields(
   Struct.assign({
     payload: Schema.fromJsonString(Schema.Unknown),
@@ -146,6 +160,23 @@ function toPersistenceSqlOrDecodeError(sqlOperation: string, decodeOperation: st
       : toPersistenceSqlError(sqlOperation)(cause);
 }
 
+function toThreadDelayedSend(row: ProjectionDelayedSendDbRow): ThreadDelayedSend {
+  return {
+    threadId: row.threadId,
+    messageId: row.messageId,
+    text: row.text,
+    attachments: row.attachments,
+    dueAt: row.dueAt,
+    ...(row.modelSelection !== null ? { modelSelection: row.modelSelection } : {}),
+    runtimeMode: row.runtimeMode,
+    interactionMode: row.interactionMode,
+    ...(row.createThread !== null
+      ? { createThread: row.createThread as ThreadDelayedSend["createThread"] }
+      : {}),
+    createdAt: row.createdAt,
+  };
+}
+
 const makeProjectionSnapshotQuery = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
@@ -189,6 +220,27 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           deleted_at AS "deletedAt"
         FROM projection_threads
         ORDER BY created_at ASC, thread_id ASC
+      `,
+  });
+
+  const listDelayedSendRows = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: ProjectionDelayedSendDbRowSchema,
+    execute: () =>
+      sql`
+        SELECT
+          thread_id AS "threadId",
+          message_id AS "messageId",
+          text,
+          attachments_json AS "attachments",
+          due_at AS "dueAt",
+          model_selection_json AS "modelSelection",
+          runtime_mode AS "runtimeMode",
+          interaction_mode AS "interactionMode",
+          create_thread_json AS "createThread",
+          created_at AS "createdAt"
+        FROM projection_delayed_sends
+        ORDER BY due_at ASC, thread_id ASC
       `,
   });
 
@@ -337,6 +389,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           const [
             projectRows,
             threadRows,
+            delayedSendRows,
             messageRows,
             proposedPlanRows,
             activityRows,
@@ -358,6 +411,14 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 toPersistenceSqlOrDecodeError(
                   "ProjectionSnapshotQuery.getSnapshot:listThreads:query",
                   "ProjectionSnapshotQuery.getSnapshot:listThreads:decodeRows",
+                ),
+              ),
+            ),
+            listDelayedSendRows(undefined).pipe(
+              Effect.mapError(
+                toPersistenceSqlOrDecodeError(
+                  "ProjectionSnapshotQuery.getSnapshot:listDelayedSends:query",
+                  "ProjectionSnapshotQuery.getSnapshot:listDelayedSends:decodeRows",
                 ),
               ),
             ),
@@ -419,6 +480,10 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             ),
           ]);
 
+          const normalizedDelayedSendRows = delayedSendRows.map(toThreadDelayedSend);
+          const delayedSendByThread = new Map(
+            normalizedDelayedSendRows.map((row) => [row.threadId, row] as const),
+          );
           const messagesByThread = new Map<string, Array<OrchestrationMessage>>();
           const proposedPlansByThread = new Map<string, Array<OrchestrationProposedPlan>>();
           const activitiesByThread = new Map<string, Array<OrchestrationThreadActivity>>();
@@ -433,6 +498,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           }
           for (const row of threadRows) {
             updatedAt = maxIso(updatedAt, row.updatedAt);
+          }
+          for (const row of normalizedDelayedSendRows) {
+            updatedAt = maxIso(updatedAt, row.createdAt);
           }
           for (const row of stateRows) {
             updatedAt = maxIso(updatedAt, row.updatedAt);
@@ -560,30 +628,39 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             deletedAt: row.deletedAt,
           }));
 
-          const threads: ReadonlyArray<OrchestrationThread> = threadRows.map((row) => ({
-            id: row.threadId,
-            projectId: row.projectId,
-            title: row.title,
-            modelSelection: row.modelSelection,
-            runtimeMode: row.runtimeMode,
-            interactionMode: row.interactionMode,
-            branch: row.branch,
-            worktreePath: row.worktreePath,
-            latestTurn: latestTurnByThread.get(row.threadId) ?? null,
-            createdAt: row.createdAt,
-            updatedAt: row.updatedAt,
-            deletedAt: row.deletedAt,
-            messages: messagesByThread.get(row.threadId) ?? [],
-            proposedPlans: proposedPlansByThread.get(row.threadId) ?? [],
-            activities: activitiesByThread.get(row.threadId) ?? [],
-            checkpoints: checkpointsByThread.get(row.threadId) ?? [],
-            session: sessionsByThread.get(row.threadId) ?? null,
-          }));
+          const threads: ReadonlyArray<OrchestrationThread> = threadRows.map((row) => {
+            const delayedSend = delayedSendByThread.get(row.threadId);
+            const thread: OrchestrationThread = {
+              id: row.threadId,
+              projectId: row.projectId,
+              title: row.title,
+              modelSelection: row.modelSelection,
+              runtimeMode: row.runtimeMode,
+              interactionMode: row.interactionMode,
+              branch: row.branch,
+              worktreePath: row.worktreePath,
+              autoContinue: row.autoContinue,
+              latestTurn: latestTurnByThread.get(row.threadId) ?? null,
+              createdAt: row.createdAt,
+              updatedAt: row.updatedAt,
+              deletedAt: row.deletedAt,
+              messages: messagesByThread.get(row.threadId) ?? [],
+              proposedPlans: proposedPlansByThread.get(row.threadId) ?? [],
+              activities: activitiesByThread.get(row.threadId) ?? [],
+              checkpoints: checkpointsByThread.get(row.threadId) ?? [],
+              session: sessionsByThread.get(row.threadId) ?? null,
+            };
+            if (delayedSend) {
+              Object.assign(thread, { delayedSend });
+            }
+            return thread;
+          });
 
           const snapshot = {
             snapshotSequence: computeSnapshotSequence(stateRows),
             projects,
             threads,
+            delayedSends: normalizedDelayedSendRows,
             updatedAt: updatedAt ?? new Date(0).toISOString(),
           };
 

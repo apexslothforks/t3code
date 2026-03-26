@@ -16,6 +16,9 @@ import {
   ThreadActivityAppendedPayload,
   ThreadCreatedPayload,
   ThreadAutoContinueSetPayload,
+  ThreadDelayedSendCancelledPayload,
+  ThreadDelayedSendDispatchedPayload,
+  ThreadDelayedSendScheduledPayload,
   ThreadDeletedPayload,
   ThreadInteractionModeSetPayload,
   ThreadMetaUpdatedPayload,
@@ -159,6 +162,7 @@ export function createEmptyReadModel(nowIso: string): OrchestrationReadModel {
     snapshotSequence: 0,
     projects: [],
     threads: [],
+    delayedSends: [],
     updatedAt: nowIso,
   };
 }
@@ -259,6 +263,7 @@ export function projectEvent(
             branch: payload.branch,
             worktreePath: payload.worktreePath,
             autoContinue: payload.autoContinue,
+            delayedSend: null,
             latestTurn: null,
             createdAt: payload.createdAt,
             updatedAt: payload.updatedAt,
@@ -285,9 +290,13 @@ export function projectEvent(
         Effect.map((payload) => ({
           ...nextBase,
           threads: updateThread(nextBase.threads, payload.threadId, {
+            delayedSend: null,
             deletedAt: payload.deletedAt,
             updatedAt: payload.deletedAt,
           }),
+          delayedSends: (nextBase.delayedSends ?? []).filter(
+            (entry) => entry.threadId !== payload.threadId,
+          ),
         })),
       );
 
@@ -347,6 +356,64 @@ export function projectEvent(
             autoContinue: payload.autoContinue,
             updatedAt: payload.updatedAt,
           }),
+        })),
+      );
+
+    case "thread.delayed-send-scheduled":
+      return decodeForEvent(
+        ThreadDelayedSendScheduledPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          threads: updateThread(nextBase.threads, payload.threadId, {
+            delayedSend: payload,
+            updatedAt: event.occurredAt,
+          }),
+          delayedSends: [
+            ...(nextBase.delayedSends ?? []).filter((entry) => entry.threadId !== payload.threadId),
+            payload,
+          ],
+        })),
+      );
+
+    case "thread.delayed-send-cancelled":
+      return decodeForEvent(
+        ThreadDelayedSendCancelledPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          threads: updateThread(nextBase.threads, payload.threadId, {
+            delayedSend: null,
+            updatedAt: payload.createdAt,
+          }),
+          delayedSends: (nextBase.delayedSends ?? []).filter(
+            (entry) => entry.threadId !== payload.threadId,
+          ),
+        })),
+      );
+
+    case "thread.delayed-send-dispatched":
+      return decodeForEvent(
+        ThreadDelayedSendDispatchedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          threads: updateThread(nextBase.threads, payload.threadId, {
+            delayedSend: null,
+            updatedAt: payload.createdAt,
+          }),
+          delayedSends: (nextBase.delayedSends ?? []).filter(
+            (entry) => entry.threadId !== payload.threadId,
+          ),
         })),
       );
 

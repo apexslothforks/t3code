@@ -314,6 +314,7 @@ export const OrchestrationThread = Schema.Struct({
       cooldownMinutes: AUTO_CONTINUE_DEFAULT_COOLDOWN_MINUTES,
     })),
   ),
+  delayedSend: Schema.optionalKey(Schema.NullOr(Schema.suspend(() => ThreadDelayedSend))),
   latestTurn: Schema.NullOr(OrchestrationLatestTurn),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
@@ -330,6 +331,7 @@ export const OrchestrationReadModel = Schema.Struct({
   snapshotSequence: NonNegativeInt,
   projects: Schema.Array(OrchestrationProject),
   threads: Schema.Array(OrchestrationThread),
+  delayedSends: Schema.optionalKey(Schema.Array(Schema.suspend(() => ThreadDelayedSend))),
   updatedAt: IsoDateTime,
 });
 export type OrchestrationReadModel = typeof OrchestrationReadModel.Type;
@@ -424,6 +426,86 @@ const ThreadAutoContinueSetCommand = Schema.Struct({
   autoContinue: ThreadAutoContinueSettings,
   createdAt: IsoDateTime,
 });
+
+const DelayedSendCreateThreadMetadata = Schema.Struct({
+  projectId: ProjectId,
+  title: TrimmedNonEmptyString,
+  modelSelection: ModelSelection,
+  runtimeMode: RuntimeMode,
+  interactionMode: ProviderInteractionMode.pipe(
+    Schema.withDecodingDefault(() => DEFAULT_PROVIDER_INTERACTION_MODE),
+  ),
+  branch: Schema.NullOr(TrimmedNonEmptyString),
+  worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  autoContinue: Schema.optional(ThreadAutoContinueSettings).pipe(
+    Schema.withDecodingDefault(() => ({
+      enabled: false,
+      messages: [],
+      stopWithHeuristic: false,
+      delayMinutes: AUTO_CONTINUE_DEFAULT_DELAY_MINUTES,
+      cooldownMinutes: AUTO_CONTINUE_DEFAULT_COOLDOWN_MINUTES,
+    })),
+  ),
+  createdAt: IsoDateTime,
+});
+
+const ThreadDelayedSendScheduleCommand = Schema.Struct({
+  type: Schema.Literal("thread.delayed-send.schedule"),
+  threadId: ThreadId,
+  commandId: CommandId,
+  messageId: MessageId,
+  text: Schema.String,
+  attachments: Schema.Array(ChatImageAttachment),
+  dueAt: IsoDateTime,
+  modelSelection: Schema.optional(ModelSelection),
+  runtimeMode: RuntimeMode,
+  interactionMode: ProviderInteractionMode,
+  createThread: Schema.optional(DelayedSendCreateThreadMetadata),
+  createdAt: IsoDateTime,
+});
+
+const ClientThreadDelayedSendScheduleCommand = Schema.Struct({
+  type: Schema.Literal("thread.delayed-send.schedule"),
+  threadId: ThreadId,
+  commandId: CommandId,
+  messageId: MessageId,
+  text: Schema.String,
+  attachments: Schema.Array(UploadChatImageAttachment),
+  dueAt: IsoDateTime,
+  modelSelection: Schema.optional(ModelSelection),
+  runtimeMode: RuntimeMode,
+  interactionMode: ProviderInteractionMode,
+  createThread: Schema.optional(DelayedSendCreateThreadMetadata),
+  createdAt: IsoDateTime,
+});
+
+const ThreadDelayedSendCancelCommand = Schema.Struct({
+  type: Schema.Literal("thread.delayed-send.cancel"),
+  threadId: ThreadId,
+  commandId: CommandId,
+  createdAt: IsoDateTime,
+});
+
+export const ThreadAutoContinueTriggerCommand = Schema.Struct({
+  type: Schema.Literal("thread.auto-continue.trigger"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  messageId: MessageId,
+  text: Schema.String,
+  triggeringAssistantMessageId: MessageId,
+  triggeringTurnId: Schema.optional(TurnId),
+  messageIndex: NonNegativeInt,
+  createdAt: IsoDateTime,
+});
+export type ThreadAutoContinueTriggerCommand = typeof ThreadAutoContinueTriggerCommand.Type;
+
+export const ThreadDelayedSendDispatchCommand = Schema.Struct({
+  type: Schema.Literal("thread.delayed-send.dispatch"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  createdAt: IsoDateTime,
+});
+export type ThreadDelayedSendDispatchCommand = typeof ThreadDelayedSendDispatchCommand.Type;
 
 export const ThreadTurnStartCommand = Schema.Struct({
   type: Schema.Literal("thread.turn.start"),
@@ -520,6 +602,8 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadRuntimeModeSetCommand,
   ThreadInteractionModeSetCommand,
   ThreadAutoContinueSetCommand,
+  ThreadDelayedSendScheduleCommand,
+  ThreadDelayedSendCancelCommand,
   ThreadActivityAppendCommand,
   ThreadTurnStartCommand,
   ThreadTurnInterruptCommand,
@@ -541,6 +625,8 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadRuntimeModeSetCommand,
   ThreadInteractionModeSetCommand,
   ThreadAutoContinueSetCommand,
+  ClientThreadDelayedSendScheduleCommand,
+  ThreadDelayedSendCancelCommand,
   ThreadActivityAppendCommand,
   ClientThreadTurnStartCommand,
   ThreadTurnInterruptCommand,
@@ -609,6 +695,8 @@ const ThreadRevertCompleteCommand = Schema.Struct({
 });
 
 const InternalOrchestrationCommand = Schema.Union([
+  ThreadAutoContinueTriggerCommand,
+  ThreadDelayedSendDispatchCommand,
   ThreadSessionSetCommand,
   ThreadMessageAssistantDeltaCommand,
   ThreadMessageAssistantCompleteCommand,
@@ -635,6 +723,9 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.runtime-mode-set",
   "thread.interaction-mode-set",
   "thread.auto-continue-set",
+  "thread.delayed-send-scheduled",
+  "thread.delayed-send-cancelled",
+  "thread.delayed-send-dispatched",
   "thread.message-sent",
   "thread.turn-start-requested",
   "thread.turn-interrupt-requested",
@@ -735,6 +826,40 @@ export const ThreadAutoContinueSetPayload = Schema.Struct({
   autoContinue: ThreadAutoContinueSettings,
   updatedAt: IsoDateTime,
 });
+
+export const ThreadDelayedSendScheduledPayload = Schema.Struct({
+  threadId: ThreadId,
+  messageId: MessageId,
+  text: Schema.String,
+  attachments: Schema.Array(ChatAttachment),
+  dueAt: IsoDateTime,
+  modelSelection: Schema.optional(ModelSelection),
+  runtimeMode: RuntimeMode,
+  interactionMode: ProviderInteractionMode,
+  createThread: Schema.optional(DelayedSendCreateThreadMetadata),
+  createdAt: IsoDateTime,
+});
+
+export const ThreadDelayedSendCancelledPayload = Schema.Struct({
+  threadId: ThreadId,
+  createdAt: IsoDateTime,
+});
+
+export const ThreadDelayedSendDispatchedPayload = Schema.Struct({
+  threadId: ThreadId,
+  messageId: MessageId,
+  text: Schema.String,
+  attachments: Schema.Array(ChatAttachment),
+  dueAt: IsoDateTime,
+  modelSelection: Schema.optional(ModelSelection),
+  runtimeMode: RuntimeMode,
+  interactionMode: ProviderInteractionMode,
+  createThread: Schema.optional(DelayedSendCreateThreadMetadata),
+  createdAt: IsoDateTime,
+});
+
+export const ThreadDelayedSend = ThreadDelayedSendScheduledPayload;
+export type ThreadDelayedSend = typeof ThreadDelayedSend.Type;
 
 export const ThreadMessageSentPayload = Schema.Struct({
   threadId: ThreadId,
@@ -889,6 +1014,21 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.auto-continue-set"),
     payload: ThreadAutoContinueSetPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.delayed-send-scheduled"),
+    payload: ThreadDelayedSendScheduledPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.delayed-send-cancelled"),
+    payload: ThreadDelayedSendCancelledPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.delayed-send-dispatched"),
+    payload: ThreadDelayedSendDispatchedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

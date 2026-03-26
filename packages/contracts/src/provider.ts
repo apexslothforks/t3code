@@ -43,6 +43,7 @@ export const ProviderSession = Schema.Struct({
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   lastError: Schema.optional(TrimmedNonEmptyString),
+  account: Schema.optional(Schema.Unknown),
 });
 export type ProviderSession = typeof ProviderSession.Type;
 

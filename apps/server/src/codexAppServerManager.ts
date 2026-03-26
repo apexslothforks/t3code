@@ -1004,8 +1004,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   }
 
   listSessions(): ProviderSession[] {
-    return Array.from(this.sessions.values(), ({ session }) => ({
+    return Array.from(this.sessions.values(), ({ session, account }) => ({
       ...session,
+      account,
     }));
   }
 

@@ -101,22 +101,9 @@ import {
   XIcon,
   ZapIcon,
 } from "lucide-react";
-import { Alert, AlertDescription, AlertTitle } from "./ui/alert";
 import { Button } from "./ui/button";
-import {
-  Dialog,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogPanel,
-  DialogPopup,
-  DialogTitle,
-} from "./ui/dialog";
-import { Field, FieldDescription, FieldLabel } from "./ui/field";
 import { Input } from "./ui/input";
 import { Separator } from "./ui/separator";
-import { Switch } from "./ui/switch";
-import { Textarea } from "./ui/textarea";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "./ui/menu";
 import { cn, randomUUID } from "~/lib/utils";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
@@ -162,6 +149,7 @@ import { deriveLatestContextWindowSnapshot } from "../lib/contextWindow";
 import { shouldUseCompactComposerFooter } from "./composerFooterLayout";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
 import { ComposerPromptEditor, type ComposerPromptEditorHandle } from "./ComposerPromptEditor";
+import { AutomationSettingsDialog } from "./AutomationSettingsDialog";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { MessagesTimeline } from "./chat/MessagesTimeline";
 import { ChatHeader } from "./chat/ChatHeader";
@@ -181,6 +169,7 @@ import {
 } from "./chat/composerProviderRegistry";
 import { ProviderStatusBanner } from "./chat/ProviderStatusBanner";
 import { ThreadErrorBanner } from "./chat/ThreadErrorBanner";
+import { DelayedSendDialog } from "./DelayedSendDialog";
 import {
   buildExpiredTerminalContextToastCopy,
   buildLocalDraftThread,
@@ -199,6 +188,7 @@ import {
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { buildQuickAutomationPreset, extractQuickAutomationTask } from "../automationPreset";
 import { useDelayedSendStore } from "../delayedSendStore";
+import { deriveAutoContinueStatusSnapshot } from "../autoContinueRunner";
 
 const ATTACHMENT_PREVIEW_HANDOFF_TTL_MS = 5000;
 const IMAGE_SIZE_LIMIT_LABEL = `${Math.round(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES / (1024 * 1024))}MB`;
@@ -228,12 +218,11 @@ const COMPOSER_PATH_QUERY_DEBOUNCE_MS = 120;
 const SCRIPT_TERMINAL_COLS = 120;
 const SCRIPT_TERMINAL_ROWS = 30;
 
-function normalizeDelayedSendMinutesInput(value: string): number {
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isFinite(parsed)) {
-    return 5;
-  }
-  return Math.min(Math.max(parsed, 0), 24 * 60);
+function formatCompactCountdown(durationMs: number): string {
+  const totalSeconds = Math.max(0, Math.ceil(durationMs / 1_000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
 }
 
 const extendReplacementRangeForTrailingSpace = (
@@ -347,19 +336,16 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const automationSettingsByThreadIdRef = useRef<
     Map<ThreadId, ReturnType<typeof normalizeAutoContinueSettings>>
   >(new Map());
+  const automationDelayResetByThreadIdRef = useRef<
+    Map<
+      ThreadId,
+      { settingsKey: string; resetAtMs?: number; ignoredAssistantMessageId?: MessageId }
+    >
+  >(new Map());
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [quickAutomationTask, setQuickAutomationTask] = useState("");
   const [isAutomationDialogOpen, setIsAutomationDialogOpen] = useState(false);
-  const [isSavingAutomation, setIsSavingAutomation] = useState(false);
-  const [automationEnabledDraft, setAutomationEnabledDraft] = useState(false);
-  const [automationMessagesTextDraft, setAutomationMessagesTextDraft] = useState("");
-  const [automationStopWithHeuristicDraft, setAutomationStopWithHeuristicDraft] = useState(false);
-  const [automationDelayMinutesDraft, setAutomationDelayMinutesDraft] = useState("1");
-  const [automationCooldownMinutesDraft, setAutomationCooldownMinutesDraft] = useState("5");
-  const [automationSaveError, setAutomationSaveError] = useState<string | null>(null);
   const [isDelayedSendDialogOpen, setIsDelayedSendDialogOpen] = useState(false);
-  const [delayedSendMinutesDraft, setDelayedSendMinutesDraft] = useState("5");
-  const [isSchedulingDelayedSend, setIsSchedulingDelayedSend] = useState(false);
   const [isDragOverComposer, setIsDragOverComposer] = useState(false);
   const [expandedImage, setExpandedImage] = useState<ExpandedImagePreview | null>(null);
   const [optimisticUserMessages, setOptimisticUserMessages] = useState<ChatMessage[]>([]);
@@ -536,6 +522,61 @@ export default function ChatView({ threadId }: ChatViewProps) {
     () => normalizeAutoContinueSettings(activeThread?.autoContinue),
     [activeThread?.autoContinue],
   );
+  useEffect(() => {
+    if (!activeThread) {
+      return;
+    }
+    const settingsKey = JSON.stringify(normalizedAutoContinue);
+    const previous = automationDelayResetByThreadIdRef.current.get(activeThread.id);
+    if (!previous) {
+      automationDelayResetByThreadIdRef.current.set(activeThread.id, { settingsKey });
+      return;
+    }
+    if (previous.settingsKey === settingsKey) {
+      return;
+    }
+    const latestAutomationAnchorMessage = [...activeThread.messages]
+      .filter((message) => message.role !== "system")
+      .toSorted(
+        (left, right) =>
+          left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id),
+      )
+      .at(-1);
+    automationDelayResetByThreadIdRef.current.set(activeThread.id, {
+      settingsKey,
+      resetAtMs: Date.now(),
+      ...(latestAutomationAnchorMessage?.role === "assistant"
+        ? { ignoredAssistantMessageId: latestAutomationAnchorMessage.id }
+        : {}),
+    });
+  }, [activeThread, normalizedAutoContinue]);
+  const activeAutomationStatus = useMemo(
+    () =>
+      activeThread
+        ? deriveAutoContinueStatusSnapshot({
+            thread: activeThread,
+            nowMs: nowTick,
+            localDelayResetAtMs: automationDelayResetByThreadIdRef.current.get(activeThread.id)
+              ?.resetAtMs,
+            ignoredAssistantMessageId: automationDelayResetByThreadIdRef.current.get(
+              activeThread.id,
+            )?.ignoredAssistantMessageId,
+          })
+        : null,
+    [activeThread, nowTick],
+  );
+  const activeAutomationCountdownLabel = useMemo(() => {
+    if (!activeAutomationStatus) {
+      return null;
+    }
+    if (activeAutomationStatus.blockedBy === "approval") {
+      return "approval";
+    }
+    if (activeAutomationStatus.blockedBy === "user-input") {
+      return "input";
+    }
+    return formatCompactCountdown(activeAutomationStatus.remainingMs);
+  }, [activeAutomationStatus]);
   const activeContextWindow = useMemo(
     () => deriveLatestContextWindowSnapshot(activeThread?.activities ?? []),
     [activeThread?.activities],
@@ -2786,89 +2827,35 @@ export default function ChatView({ threadId }: ChatViewProps) {
     if (!serverThread) {
       return;
     }
-    const rememberedSettings = automationSettingsByThreadIdRef.current.get(threadId);
-    const currentServerThread = useStore
-      .getState()
-      .threads.find((thread) => thread.id === threadId);
-    const draftSettings = useComposerDraftStore.getState().getDraftThread(threadId)?.autoContinue;
-    const currentSettings = normalizeAutoContinueSettings(
-      rememberedSettings ?? currentServerThread?.autoContinue ?? draftSettings,
-    );
-    setAutomationEnabledDraft(currentSettings.enabled);
-    setAutomationMessagesTextDraft(currentSettings.messages.join("\n"));
-    setAutomationStopWithHeuristicDraft(currentSettings.stopWithHeuristic);
-    setAutomationDelayMinutesDraft(String(currentSettings.delayMinutes));
-    setAutomationCooldownMinutesDraft(String(currentSettings.cooldownMinutes));
-    setAutomationSaveError(null);
     setIsAutomationDialogOpen(true);
-  }, [serverThread, threadId]);
+  }, [serverThread]);
 
   const applyAutomationSettings = useCallback(
     async (nextAutoContinue: typeof normalizedAutoContinue) => {
       if (isLocalDraftThread) {
         automationSettingsByThreadIdRef.current.set(threadId, nextAutoContinue);
         setDraftThreadContext(threadId, { autoContinue: nextAutoContinue });
-        setAutomationSaveError(null);
         return;
       }
       if (!serverThread) {
-        const message = "Automation settings are available after the thread has started.";
-        setAutomationSaveError(message);
-        throw new Error(message);
+        throw new Error("Automation settings are available after the thread has started.");
       }
       const api = readNativeApi();
       if (!api) {
-        const message = "Unable to reach the orchestration API.";
-        setAutomationSaveError(message);
-        throw new Error(message);
+        throw new Error("Unable to reach the orchestration API.");
       }
-      setAutomationSaveError(null);
-      setIsSavingAutomation(true);
-      try {
-        automationSettingsByThreadIdRef.current.set(threadId, nextAutoContinue);
-        await api.orchestration.dispatchCommand({
-          type: "thread.auto-continue.set",
-          commandId: newCommandId(),
-          threadId: serverThread.id,
-          autoContinue: nextAutoContinue,
-          createdAt: new Date().toISOString(),
-        });
-        setStoreThreadAutoContinue(serverThread.id, nextAutoContinue);
-      } catch (error) {
-        const message =
-          error instanceof Error ? error.message : "Failed to save automation settings.";
-        setAutomationSaveError(message);
-        throw error;
-      } finally {
-        setIsSavingAutomation(false);
-      }
+      automationSettingsByThreadIdRef.current.set(threadId, nextAutoContinue);
+      await api.orchestration.dispatchCommand({
+        type: "thread.auto-continue.set",
+        commandId: newCommandId(),
+        threadId: serverThread.id,
+        autoContinue: nextAutoContinue,
+        createdAt: new Date().toISOString(),
+      });
+      setStoreThreadAutoContinue(serverThread.id, nextAutoContinue);
     },
     [isLocalDraftThread, serverThread, setDraftThreadContext, setStoreThreadAutoContinue, threadId],
   );
-
-  const saveAutomationSettings = useCallback(async () => {
-    try {
-      await applyAutomationSettings(
-        normalizeAutoContinueSettings({
-          enabled: automationEnabledDraft,
-          messages: automationMessagesTextDraft.split("\n"),
-          stopWithHeuristic: automationStopWithHeuristicDraft,
-          delayMinutes: Number.parseInt(automationDelayMinutesDraft, 10),
-          cooldownMinutes: Number.parseInt(automationCooldownMinutesDraft, 10),
-        }),
-      );
-      setIsAutomationDialogOpen(false);
-    } catch {
-      return;
-    }
-  }, [
-    applyAutomationSettings,
-    automationCooldownMinutesDraft,
-    automationDelayMinutesDraft,
-    automationEnabledDraft,
-    automationMessagesTextDraft,
-    automationStopWithHeuristicDraft,
-  ]);
 
   const onApplyQuickAutomation = useCallback(async () => {
     const api = readNativeApi();
@@ -2914,109 +2901,107 @@ export default function ChatView({ threadId }: ChatViewProps) {
     if (delayedSendDisabledReason) {
       return;
     }
-    setDelayedSendMinutesDraft(String(scheduledDelayedSend?.delayMinutes ?? 5));
     setIsDelayedSendDialogOpen(true);
-  }, [delayedSendDisabledReason, scheduledDelayedSend?.delayMinutes]);
+  }, [delayedSendDisabledReason]);
 
-  const scheduleDelayedSend = useCallback(async () => {
-    if (!activeThread || delayedSendDisabledReason) {
-      if (delayedSendDisabledReason) {
+  const scheduleDelayedSend = useCallback(
+    async (delayMinutes: number) => {
+      if (!activeThread || delayedSendDisabledReason) {
+        if (delayedSendDisabledReason) {
+          toastManager.add({
+            type: "warning",
+            title: "Delayed send unavailable",
+            description: delayedSendDisabledReason,
+          });
+        }
+        return;
+      }
+
+      const trimmed = prompt.trim();
+      const composerImagesSnapshot = [...composerImages];
+      if (!trimmed && composerImagesSnapshot.length === 0) {
+        return;
+      }
+
+      try {
+        const attachments = await Promise.all(
+          composerImagesSnapshot.map(async (image) => ({
+            type: "image" as const,
+            name: image.name,
+            mimeType: image.mimeType,
+            sizeBytes: image.sizeBytes,
+            dataUrl: await readFileAsDataUrl(image.file),
+          })),
+        );
+        const scheduledAtMs = Date.now();
+        const dueAtMs = scheduledAtMs + delayMinutes * 60_000;
+        const firstImageName = composerImagesSnapshot[0]?.name;
+        const titleSeed = trimmed || (firstImageName ? `Image: ${firstImageName}` : "New thread");
+        useDelayedSendStore.getState().scheduleSend({
+          threadId: activeThread.id,
+          createdAt: new Date(scheduledAtMs).toISOString(),
+          dueAt: new Date(dueAtMs).toISOString(),
+          delayMinutes,
+          displayText: truncateTitle(
+            trimmed || (firstImageName ? `Image: ${firstImageName}` : "Image"),
+          ),
+          text: trimmed,
+          attachments,
+          modelSelection: selectedModelSelection,
+          runtimeMode,
+          interactionMode,
+          ...(isLocalDraftThread
+            ? {
+                createThread: {
+                  projectId: activeThread.projectId,
+                  title: truncateTitle(titleSeed),
+                  modelSelection: selectedModelSelection,
+                  runtimeMode,
+                  interactionMode,
+                  branch: activeThread.branch,
+                  worktreePath: activeThread.worktreePath,
+                  autoContinue: normalizedAutoContinue,
+                  createdAt: activeThread.createdAt,
+                },
+              }
+            : {}),
+        });
+        promptRef.current = "";
+        clearComposerDraftContent(activeThread.id);
+        setComposerHighlightedItemId(null);
+        setComposerCursor(0);
+        setComposerTrigger(null);
+        setIsDelayedSendDialogOpen(false);
         toastManager.add({
-          type: "warning",
-          title: "Delayed send unavailable",
-          description: delayedSendDisabledReason,
+          type: "success",
+          title: "Delayed send scheduled",
+          description:
+            delayMinutes === 0
+              ? "The message will send as soon as the thread is ready."
+              : `The message will send in ${delayMinutes} minute${delayMinutes === 1 ? "" : "s"}.`,
+        });
+      } catch (error) {
+        toastManager.add({
+          type: "error",
+          title: "Unable to schedule delayed send",
+          description:
+            error instanceof Error ? error.message : "Failed to prepare the delayed send.",
         });
       }
-      return;
-    }
-
-    const trimmed = prompt.trim();
-    const composerImagesSnapshot = [...composerImages];
-    if (!trimmed && composerImagesSnapshot.length === 0) {
-      return;
-    }
-
-    setIsSchedulingDelayedSend(true);
-    try {
-      const attachments = await Promise.all(
-        composerImagesSnapshot.map(async (image) => ({
-          type: "image" as const,
-          name: image.name,
-          mimeType: image.mimeType,
-          sizeBytes: image.sizeBytes,
-          dataUrl: await readFileAsDataUrl(image.file),
-        })),
-      );
-      const delayMinutes = normalizeDelayedSendMinutesInput(delayedSendMinutesDraft);
-      const scheduledAtMs = Date.now();
-      const dueAtMs = scheduledAtMs + delayMinutes * 60_000;
-      const firstImageName = composerImagesSnapshot[0]?.name;
-      const titleSeed = trimmed || (firstImageName ? `Image: ${firstImageName}` : "New thread");
-      useDelayedSendStore.getState().scheduleSend({
-        threadId: activeThread.id,
-        createdAt: new Date(scheduledAtMs).toISOString(),
-        dueAt: new Date(dueAtMs).toISOString(),
-        delayMinutes,
-        displayText: truncateTitle(
-          trimmed || (firstImageName ? `Image: ${firstImageName}` : "Image"),
-        ),
-        text: trimmed,
-        attachments,
-        modelSelection: selectedModelSelection,
-        runtimeMode,
-        interactionMode,
-        ...(isLocalDraftThread
-          ? {
-              createThread: {
-                projectId: activeThread.projectId,
-                title: truncateTitle(titleSeed),
-                modelSelection: selectedModelSelection,
-                runtimeMode,
-                interactionMode,
-                branch: activeThread.branch,
-                worktreePath: activeThread.worktreePath,
-                autoContinue: normalizedAutoContinue,
-                createdAt: activeThread.createdAt,
-              },
-            }
-          : {}),
-      });
-      promptRef.current = "";
-      clearComposerDraftContent(activeThread.id);
-      setComposerHighlightedItemId(null);
-      setComposerCursor(0);
-      setComposerTrigger(null);
-      setIsDelayedSendDialogOpen(false);
-      toastManager.add({
-        type: "success",
-        title: "Delayed send scheduled",
-        description:
-          delayMinutes === 0
-            ? "The message will send as soon as the thread is ready."
-            : `The message will send in ${delayMinutes} minute${delayMinutes === 1 ? "" : "s"}.`,
-      });
-    } catch (error) {
-      toastManager.add({
-        type: "error",
-        title: "Unable to schedule delayed send",
-        description: error instanceof Error ? error.message : "Failed to prepare the delayed send.",
-      });
-    } finally {
-      setIsSchedulingDelayedSend(false);
-    }
-  }, [
-    activeThread,
-    clearComposerDraftContent,
-    composerImages,
-    delayedSendDisabledReason,
-    delayedSendMinutesDraft,
-    interactionMode,
-    isLocalDraftThread,
-    normalizedAutoContinue,
-    prompt,
-    runtimeMode,
-    selectedModelSelection,
-  ]);
+    },
+    [
+      activeThread,
+      clearComposerDraftContent,
+      composerImages,
+      delayedSendDisabledReason,
+      interactionMode,
+      isLocalDraftThread,
+      normalizedAutoContinue,
+      prompt,
+      runtimeMode,
+      selectedModelSelection,
+    ],
+  );
 
   const onRespondToApproval = useCallback(
     async (requestId: ApprovalRequestId, decision: ProviderApprovalDecision) => {
@@ -4307,6 +4292,30 @@ export default function ChatView({ threadId }: ChatViewProps) {
                             <Clock3Icon className="size-3.5" />
                             <span className="text-xs">Later</span>
                           </Button>
+                          {activeAutomationStatus ? (
+                            <div className="hidden w-28 flex-col gap-1 lg:flex">
+                              <div className="flex items-center justify-between text-[10px] text-muted-foreground/80">
+                                <span>{`Auto ${activeAutomationStatus.sentCount + 1}`}</span>
+                                <span>{activeAutomationCountdownLabel}</span>
+                              </div>
+                              <div className="h-1.5 overflow-hidden rounded-full bg-border/70">
+                                <div
+                                  className={cn(
+                                    "h-full rounded-full transition-[width] duration-700 ease-out",
+                                    activeAutomationStatus.blockedBy === null
+                                      ? "bg-primary/80"
+                                      : "bg-amber-500/70",
+                                  )}
+                                  style={{
+                                    width: `${Math.max(
+                                      4,
+                                      Math.round(activeAutomationStatus.progressRatio * 100),
+                                    )}%`,
+                                  }}
+                                />
+                              </div>
+                            </div>
+                          ) : null}
                         </div>
                         {activeContextWindow ? (
                           <ContextWindowMeter usage={activeContextWindow} />
@@ -4521,156 +4530,23 @@ export default function ChatView({ threadId }: ChatViewProps) {
           />
         ) : null}
 
-        <Dialog open={isAutomationDialogOpen} onOpenChange={setIsAutomationDialogOpen}>
-          <DialogPopup className="max-w-xl">
-            <DialogHeader>
-              <DialogTitle>Automation</DialogTitle>
-              <DialogDescription>
-                Configure the follow-up message, delay, cooldown, and heuristic stop behavior.
-              </DialogDescription>
-            </DialogHeader>
-            <DialogPanel className="space-y-4">
-              <Field>
-                <FieldLabel htmlFor="automation-enabled">Enabled</FieldLabel>
-                <Switch
-                  checked={automationEnabledDraft}
-                  onCheckedChange={(checked) => setAutomationEnabledDraft(checked)}
-                  aria-label="Enable automation"
-                  id="automation-enabled"
-                />
-              </Field>
-              <Field>
-                <FieldLabel htmlFor="automation-messages">Messages</FieldLabel>
-                <FieldDescription>
-                  One message per line. The runner rotates through them.
-                </FieldDescription>
-                <Textarea
-                  id="automation-messages"
-                  value={automationMessagesTextDraft}
-                  onChange={(event) => setAutomationMessagesTextDraft(event.target.value)}
-                  placeholder="work on the next issue"
-                />
-              </Field>
-              <Field>
-                <FieldLabel htmlFor="automation-stop-heuristic">Stop with heuristic</FieldLabel>
-                <FieldDescription>
-                  Stop chaining if an automation-triggered turn finishes faster than the cooldown.
-                </FieldDescription>
-                <Switch
-                  checked={automationStopWithHeuristicDraft}
-                  onCheckedChange={(checked) => setAutomationStopWithHeuristicDraft(checked)}
-                  aria-label="Stop with heuristic"
-                  id="automation-stop-heuristic"
-                />
-              </Field>
-              <div className="grid gap-4 sm:grid-cols-2">
-                <Field>
-                  <FieldLabel htmlFor="automation-delay">Delay minutes</FieldLabel>
-                  <Input
-                    id="automation-delay"
-                    type="number"
-                    min={0}
-                    max={1440}
-                    step={1}
-                    value={automationDelayMinutesDraft}
-                    onChange={(event) => setAutomationDelayMinutesDraft(event.target.value)}
-                    inputMode="numeric"
-                  />
-                </Field>
-                <Field>
-                  <FieldLabel htmlFor="automation-cooldown">Cooldown minutes</FieldLabel>
-                  <Input
-                    id="automation-cooldown"
-                    type="number"
-                    min={0}
-                    max={1440}
-                    step={1}
-                    value={automationCooldownMinutesDraft}
-                    onChange={(event) => setAutomationCooldownMinutesDraft(event.target.value)}
-                    inputMode="numeric"
-                  />
-                </Field>
-              </div>
-              {automationSaveError ? (
-                <Alert variant="error">
-                  <AlertTitle>Unable to save automation</AlertTitle>
-                  <AlertDescription>{automationSaveError}</AlertDescription>
-                </Alert>
-              ) : null}
-            </DialogPanel>
-            <DialogFooter>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setIsAutomationDialogOpen(false)}
-                disabled={isSavingAutomation}
-              >
-                Cancel
-              </Button>
-              <Button
-                type="button"
-                onClick={() => void saveAutomationSettings()}
-                disabled={isSavingAutomation}
-              >
-                {isSavingAutomation ? "Saving..." : "Save"}
-              </Button>
-            </DialogFooter>
-          </DialogPopup>
-        </Dialog>
+        <AutomationSettingsDialog
+          open={isAutomationDialogOpen}
+          onOpenChange={setIsAutomationDialogOpen}
+          threadId={activeThread.id}
+          currentSettings={normalizedAutoContinue}
+          onSave={applyAutomationSettings}
+        />
 
-        <Dialog open={isDelayedSendDialogOpen} onOpenChange={setIsDelayedSendDialogOpen}>
-          <DialogPopup className="max-w-sm">
-            <DialogHeader>
-              <DialogTitle>Send Later</DialogTitle>
-              <DialogDescription>
-                Queue this exact message for the active thread and send it after a one-off delay.
-              </DialogDescription>
-            </DialogHeader>
-            <DialogPanel className="space-y-4">
-              <Field>
-                <FieldLabel htmlFor="delayed-send-minutes">Delay</FieldLabel>
-                <FieldDescription>
-                  This is only for the current queued send. It does not change automation settings.
-                </FieldDescription>
-                <Input
-                  id="delayed-send-minutes"
-                  type="number"
-                  min={0}
-                  max={1440}
-                  step={1}
-                  value={delayedSendMinutesDraft}
-                  onChange={(event) => setDelayedSendMinutesDraft(event.target.value)}
-                  inputMode="numeric"
-                />
-              </Field>
-              {scheduledDelayedSend ? (
-                <Alert>
-                  <AlertTitle>Existing delayed send</AlertTitle>
-                  <AlertDescription>
-                    Saving again replaces the existing delayed send for this thread.
-                  </AlertDescription>
-                </Alert>
-              ) : null}
-            </DialogPanel>
-            <DialogFooter variant="bare">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setIsDelayedSendDialogOpen(false)}
-                disabled={isSchedulingDelayedSend}
-              >
-                Cancel
-              </Button>
-              <Button
-                type="button"
-                onClick={() => void scheduleDelayedSend()}
-                disabled={isSchedulingDelayedSend}
-              >
-                {isSchedulingDelayedSend ? "Scheduling..." : "Schedule"}
-              </Button>
-            </DialogFooter>
-          </DialogPopup>
-        </Dialog>
+        <DelayedSendDialog
+          open={isDelayedSendDialogOpen}
+          onOpenChange={setIsDelayedSendDialogOpen}
+          hasExistingScheduledSend={scheduledDelayedSend !== null}
+          onSchedule={scheduleDelayedSend}
+          {...(scheduledDelayedSend
+            ? { defaultDelayMinutes: scheduledDelayedSend.delayMinutes }
+            : {})}
+        />
       </div>
       {/* end horizontal flex container */}
 
