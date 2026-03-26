@@ -82,6 +82,12 @@ describe("orchestration projector", () => {
         },
         runtimeMode: "full-access",
         interactionMode: "default",
+        autoContinue: {
+          enabled: false,
+          messages: [],
+          delayMinutes: 3,
+          cooldownMinutes: 5,
+        },
         branch: null,
         worktreePath: null,
         latestTurn: null,
@@ -95,6 +101,65 @@ describe("orchestration projector", () => {
         session: null,
       },
     ]);
+  });
+
+  it("updates thread auto-continue settings from thread.auto-continue-set", async () => {
+    const now = new Date().toISOString();
+    const created = await Effect.runPromise(
+      projectEvent(
+        createEmptyReadModel(now),
+        makeEvent({
+          sequence: 1,
+          type: "thread.created",
+          aggregateKind: "thread",
+          aggregateId: "thread-1",
+          occurredAt: now,
+          commandId: "cmd-thread-create",
+          payload: {
+            threadId: "thread-1",
+            projectId: "project-1",
+            title: "demo",
+            model: "gpt-5-codex",
+            runtimeMode: "full-access",
+            branch: null,
+            worktreePath: null,
+            createdAt: now,
+            updatedAt: now,
+          },
+        }),
+      ),
+    );
+
+    const next = await Effect.runPromise(
+      projectEvent(
+        created,
+        makeEvent({
+          sequence: 2,
+          type: "thread.auto-continue-set",
+          aggregateKind: "thread",
+          aggregateId: "thread-1",
+          occurredAt: "2026-03-08T10:05:00.000Z",
+          commandId: "cmd-thread-auto-continue-set",
+          payload: {
+            threadId: "thread-1",
+            autoContinue: {
+              enabled: true,
+              messages: ["go on", "keep going"],
+              delayMinutes: 4,
+              cooldownMinutes: 8,
+            },
+            updatedAt: "2026-03-08T10:05:00.000Z",
+          },
+        }),
+      ),
+    );
+
+    expect(next.threads[0]?.autoContinue).toEqual({
+      enabled: true,
+      messages: ["go on", "keep going"],
+      delayMinutes: 4,
+      cooldownMinutes: 8,
+    });
   });
 
   it("fails when event payload cannot be decoded by runtime schema", async () => {

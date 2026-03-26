@@ -94,6 +94,13 @@ describe("OrchestrationEngine", () => {
         runtimeMode: "approval-required",
         branch: null,
         worktreePath: null,
+        autoContinue: {
+          enabled: false,
+          messages: [],
+          stopWithHeuristic: false,
+          delayMinutes: 3,
+          cooldownMinutes: 5,
+        },
         createdAt,
       }),
     );
@@ -154,6 +161,13 @@ describe("OrchestrationEngine", () => {
         runtimeMode: "approval-required",
         branch: null,
         worktreePath: null,
+        autoContinue: {
+          enabled: false,
+          messages: [],
+          stopWithHeuristic: false,
+          delayMinutes: 3,
+          cooldownMinutes: 5,
+        },
         createdAt,
       }),
     );
@@ -222,6 +236,13 @@ describe("OrchestrationEngine", () => {
           runtimeMode: "approval-required",
           branch: null,
           worktreePath: null,
+          autoContinue: {
+            enabled: false,
+            messages: [],
+            stopWithHeuristic: false,
+            delayMinutes: 3,
+            cooldownMinutes: 5,
+          },
           createdAt,
         });
         yield* engine.dispatch({
@@ -273,6 +294,13 @@ describe("OrchestrationEngine", () => {
         runtimeMode: "approval-required",
         branch: null,
         worktreePath: null,
+        autoContinue: {
+          enabled: false,
+          messages: [],
+          stopWithHeuristic: false,
+          delayMinutes: 3,
+          cooldownMinutes: 5,
+        },
         createdAt,
       }),
     );
@@ -392,6 +420,13 @@ describe("OrchestrationEngine", () => {
           runtimeMode: "approval-required",
           branch: null,
           worktreePath: null,
+          autoContinue: {
+            enabled: false,
+            messages: [],
+            stopWithHeuristic: false,
+            delayMinutes: 3,
+            cooldownMinutes: 5,
+          },
           createdAt,
         }),
       ),
@@ -412,6 +447,13 @@ describe("OrchestrationEngine", () => {
         runtimeMode: "approval-required",
         branch: null,
         worktreePath: null,
+        autoContinue: {
+          enabled: false,
+          messages: [],
+          stopWithHeuristic: false,
+          delayMinutes: 3,
+          cooldownMinutes: 5,
+        },
         createdAt,
       }),
     );
@@ -483,6 +525,13 @@ describe("OrchestrationEngine", () => {
         runtimeMode: "approval-required",
         branch: null,
         worktreePath: null,
+        autoContinue: {
+          enabled: false,
+          messages: [],
+          stopWithHeuristic: false,
+          delayMinutes: 3,
+          cooldownMinutes: 5,
+        },
         createdAt,
       }),
     );
@@ -624,6 +673,13 @@ describe("OrchestrationEngine", () => {
         runtimeMode: "approval-required",
         branch: null,
         worktreePath: null,
+        autoContinue: {
+          enabled: false,
+          messages: [],
+          stopWithHeuristic: false,
+          delayMinutes: 3,
+          cooldownMinutes: 5,
+        },
         createdAt,
       }),
     );
@@ -710,6 +766,13 @@ describe("OrchestrationEngine", () => {
         runtimeMode: "approval-required",
         branch: null,
         worktreePath: null,
+        autoContinue: {
+          enabled: false,
+          messages: [],
+          stopWithHeuristic: false,
+          delayMinutes: 3,
+          cooldownMinutes: 5,
+        },
         createdAt,
       }),
     );
@@ -730,6 +793,13 @@ describe("OrchestrationEngine", () => {
           runtimeMode: "approval-required",
           branch: null,
           worktreePath: null,
+          autoContinue: {
+            enabled: false,
+            messages: [],
+            stopWithHeuristic: false,
+            delayMinutes: 3,
+            cooldownMinutes: 5,
+          },
           createdAt,
         }),
       ),

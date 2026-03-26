@@ -84,6 +84,12 @@ export type ProviderUserInputAnswers = typeof ProviderUserInputAnswers.Type;
 export const PROVIDER_SEND_TURN_MAX_INPUT_CHARS = 120_000;
 export const PROVIDER_SEND_TURN_MAX_ATTACHMENTS = 8;
 export const PROVIDER_SEND_TURN_MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+export const AUTO_CONTINUE_MAX_MESSAGES = 16;
+export const AUTO_CONTINUE_MAX_MESSAGE_LENGTH = 200;
+export const DEFAULT_AUTO_CONTINUE_MESSAGE = "go on";
+export const AUTO_CONTINUE_DEFAULT_DELAY_MINUTES = 3;
+export const AUTO_CONTINUE_DEFAULT_COOLDOWN_MINUTES = 5;
+export const AUTO_CONTINUE_MAX_TIMER_MINUTES = 24 * 60;
 const PROVIDER_SEND_TURN_MAX_IMAGE_DATA_URL_CHARS = 14_000_000;
 const CHAT_ATTACHMENT_ID_MAX_CHARS = 128;
 // Correlation id is command id by design in this model.
@@ -250,6 +256,25 @@ export const OrchestrationThreadActivity = Schema.Struct({
 });
 export type OrchestrationThreadActivity = typeof OrchestrationThreadActivity.Type;
 
+const AutoContinueTimerMinutes = NonNegativeInt.check(
+  Schema.isLessThanOrEqualTo(AUTO_CONTINUE_MAX_TIMER_MINUTES),
+);
+
+export const ThreadAutoContinueSettings = Schema.Struct({
+  enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(() => false)),
+  messages: Schema.Array(
+    TrimmedNonEmptyString.check(Schema.isMaxLength(AUTO_CONTINUE_MAX_MESSAGE_LENGTH)),
+  ).pipe(Schema.withDecodingDefault(() => [])),
+  stopWithHeuristic: Schema.Boolean.pipe(Schema.withDecodingDefault(() => false)),
+  delayMinutes: AutoContinueTimerMinutes.pipe(
+    Schema.withDecodingDefault(() => AUTO_CONTINUE_DEFAULT_DELAY_MINUTES),
+  ),
+  cooldownMinutes: AutoContinueTimerMinutes.pipe(
+    Schema.withDecodingDefault(() => AUTO_CONTINUE_DEFAULT_COOLDOWN_MINUTES),
+  ),
+});
+export type ThreadAutoContinueSettings = typeof ThreadAutoContinueSettings.Type;
+
 const OrchestrationLatestTurnState = Schema.Literals([
   "running",
   "interrupted",
@@ -280,6 +305,15 @@ export const OrchestrationThread = Schema.Struct({
   ),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  autoContinue: Schema.optional(ThreadAutoContinueSettings).pipe(
+    Schema.withDecodingDefault(() => ({
+      enabled: false,
+      messages: [],
+      stopWithHeuristic: false,
+      delayMinutes: AUTO_CONTINUE_DEFAULT_DELAY_MINUTES,
+      cooldownMinutes: AUTO_CONTINUE_DEFAULT_COOLDOWN_MINUTES,
+    })),
+  ),
   latestTurn: Schema.NullOr(OrchestrationLatestTurn),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
@@ -339,6 +373,15 @@ const ThreadCreateCommand = Schema.Struct({
   ),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  autoContinue: Schema.optional(ThreadAutoContinueSettings).pipe(
+    Schema.withDecodingDefault(() => ({
+      enabled: false,
+      messages: [],
+      stopWithHeuristic: false,
+      delayMinutes: AUTO_CONTINUE_DEFAULT_DELAY_MINUTES,
+      cooldownMinutes: AUTO_CONTINUE_DEFAULT_COOLDOWN_MINUTES,
+    })),
+  ),
   createdAt: IsoDateTime,
 });
 
@@ -371,6 +414,14 @@ const ThreadInteractionModeSetCommand = Schema.Struct({
   commandId: CommandId,
   threadId: ThreadId,
   interactionMode: ProviderInteractionMode,
+  createdAt: IsoDateTime,
+});
+
+const ThreadAutoContinueSetCommand = Schema.Struct({
+  type: Schema.Literal("thread.auto-continue.set"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  autoContinue: ThreadAutoContinueSettings,
   createdAt: IsoDateTime,
 });
 
@@ -451,6 +502,14 @@ const ThreadSessionStopCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const ThreadActivityAppendCommand = Schema.Struct({
+  type: Schema.Literal("thread.activity.append"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  activity: OrchestrationThreadActivity,
+  createdAt: IsoDateTime,
+});
+
 const DispatchableClientOrchestrationCommand = Schema.Union([
   ProjectCreateCommand,
   ProjectMetaUpdateCommand,
@@ -460,6 +519,8 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadMetaUpdateCommand,
   ThreadRuntimeModeSetCommand,
   ThreadInteractionModeSetCommand,
+  ThreadAutoContinueSetCommand,
+  ThreadActivityAppendCommand,
   ThreadTurnStartCommand,
   ThreadTurnInterruptCommand,
   ThreadApprovalRespondCommand,
@@ -479,6 +540,8 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadMetaUpdateCommand,
   ThreadRuntimeModeSetCommand,
   ThreadInteractionModeSetCommand,
+  ThreadAutoContinueSetCommand,
+  ThreadActivityAppendCommand,
   ClientThreadTurnStartCommand,
   ThreadTurnInterruptCommand,
   ThreadApprovalRespondCommand,
@@ -537,14 +600,6 @@ const ThreadTurnDiffCompleteCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
-const ThreadActivityAppendCommand = Schema.Struct({
-  type: Schema.Literal("thread.activity.append"),
-  commandId: CommandId,
-  threadId: ThreadId,
-  activity: OrchestrationThreadActivity,
-  createdAt: IsoDateTime,
-});
-
 const ThreadRevertCompleteCommand = Schema.Struct({
   type: Schema.Literal("thread.revert.complete"),
   commandId: CommandId,
@@ -579,6 +634,7 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.meta-updated",
   "thread.runtime-mode-set",
   "thread.interaction-mode-set",
+  "thread.auto-continue-set",
   "thread.message-sent",
   "thread.turn-start-requested",
   "thread.turn-interrupt-requested",
@@ -602,7 +658,7 @@ export const ProjectCreatedPayload = Schema.Struct({
   projectId: ProjectId,
   title: TrimmedNonEmptyString,
   workspaceRoot: TrimmedNonEmptyString,
-  defaultModelSelection: Schema.NullOr(ModelSelection),
+  defaultModelSelection: Schema.NullOr(ModelSelection).pipe(Schema.withDecodingDefault(() => null)),
   scripts: Schema.Array(ProjectScript),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
@@ -633,6 +689,15 @@ export const ThreadCreatedPayload = Schema.Struct({
   ),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  autoContinue: Schema.optional(ThreadAutoContinueSettings).pipe(
+    Schema.withDecodingDefault(() => ({
+      enabled: false,
+      messages: [],
+      stopWithHeuristic: false,
+      delayMinutes: AUTO_CONTINUE_DEFAULT_DELAY_MINUTES,
+      cooldownMinutes: AUTO_CONTINUE_DEFAULT_COOLDOWN_MINUTES,
+    })),
+  ),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -662,6 +727,12 @@ export const ThreadInteractionModeSetPayload = Schema.Struct({
   interactionMode: ProviderInteractionMode.pipe(
     Schema.withDecodingDefault(() => DEFAULT_PROVIDER_INTERACTION_MODE),
   ),
+  updatedAt: IsoDateTime,
+});
+
+export const ThreadAutoContinueSetPayload = Schema.Struct({
+  threadId: ThreadId,
+  autoContinue: ThreadAutoContinueSettings,
   updatedAt: IsoDateTime,
 });
 
@@ -813,6 +884,11 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.interaction-mode-set"),
     payload: ThreadInteractionModeSetPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.auto-continue-set"),
+    payload: ThreadAutoContinueSetPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

@@ -1,4 +1,6 @@
 import {
+  AUTO_CONTINUE_DEFAULT_COOLDOWN_MINUTES,
+  AUTO_CONTINUE_DEFAULT_DELAY_MINUTES,
   ApprovalRequestId,
   type ChatAttachment,
   type OrchestrationEvent,
@@ -425,6 +427,13 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             interactionMode: event.payload.interactionMode,
             branch: event.payload.branch,
             worktreePath: event.payload.worktreePath,
+            autoContinue: event.payload.autoContinue ?? {
+              enabled: false,
+              messages: [],
+              stopWithHeuristic: false,
+              delayMinutes: AUTO_CONTINUE_DEFAULT_DELAY_MINUTES,
+              cooldownMinutes: AUTO_CONTINUE_DEFAULT_COOLDOWN_MINUTES,
+            },
             latestTurnId: null,
             createdAt: event.payload.createdAt,
             updatedAt: event.payload.updatedAt,
@@ -479,6 +488,21 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
             interactionMode: event.payload.interactionMode,
+            updatedAt: event.payload.updatedAt,
+          });
+          return;
+        }
+
+        case "thread.auto-continue-set": {
+          const existingRow = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isNone(existingRow)) {
+            return;
+          }
+          yield* projectionThreadRepository.upsert({
+            ...existingRow.value,
+            autoContinue: event.payload.autoContinue,
             updatedAt: event.payload.updatedAt,
           });
           return;

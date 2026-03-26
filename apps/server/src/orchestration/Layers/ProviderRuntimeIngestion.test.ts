@@ -216,6 +216,13 @@ describe("ProviderRuntimeIngestion", () => {
         runtimeMode: "approval-required",
         branch: null,
         worktreePath: null,
+        autoContinue: {
+          enabled: false,
+          messages: [],
+          stopWithHeuristic: false,
+          delayMinutes: 3,
+          cooldownMinutes: 5,
+        },
         createdAt,
       }),
     );
@@ -1514,6 +1521,119 @@ describe("ProviderRuntimeIngestion", () => {
     expect(message?.text.length).toBe(oversizedText.length);
     expect(message?.text).toBe(oversizedText);
     expect(message?.streaming).toBe(false);
+  });
+
+  it("marks pending approvals and user inputs stale when the provider session exits", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.activity.append",
+        commandId: CommandId.makeUnsafe("cmd-approval-requested-before-exit"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        activity: {
+          id: EventId.makeUnsafe("activity-approval-requested-before-exit"),
+          tone: "approval",
+          kind: "approval.requested",
+          summary: "Command approval requested",
+          payload: {
+            requestId: "approval-request-1",
+            requestKind: "command",
+          },
+          turnId: null,
+          createdAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.activity.append",
+        commandId: CommandId.makeUnsafe("cmd-user-input-requested-before-exit"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        activity: {
+          id: EventId.makeUnsafe("activity-user-input-requested-before-exit"),
+          tone: "info",
+          kind: "user-input.requested",
+          summary: "User input requested",
+          payload: {
+            requestId: "user-input-request-1",
+            questions: [
+              {
+                id: "sandbox_mode",
+                header: "Sandbox",
+                question: "Which mode should be used?",
+                options: [
+                  {
+                    label: "workspace-write",
+                    description: "Allow workspace writes only",
+                  },
+                ],
+              },
+            ],
+          },
+          turnId: null,
+          createdAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+
+    harness.emit({
+      type: "session.exited",
+      eventId: asEventId("evt-session-exited-stale-requests"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      payload: {
+        exitCode: 0,
+      },
+    });
+
+    const thread = await waitForThread(
+      harness.engine,
+      (entry) =>
+        entry.activities.some(
+          (activity: ProviderRuntimeTestActivity) =>
+            activity.kind === "provider.approval.respond.failed" &&
+            typeof activity.payload === "object" &&
+            activity.payload !== null &&
+            (activity.payload as Record<string, unknown>).requestId === "approval-request-1",
+        ) &&
+        entry.activities.some(
+          (activity: ProviderRuntimeTestActivity) =>
+            activity.kind === "provider.user-input.respond.failed" &&
+            typeof activity.payload === "object" &&
+            activity.payload !== null &&
+            (activity.payload as Record<string, unknown>).requestId === "user-input-request-1",
+        ),
+    );
+
+    const approvalFailure = thread.activities.find(
+      (activity: ProviderRuntimeTestActivity) =>
+        activity.kind === "provider.approval.respond.failed" &&
+        typeof activity.payload === "object" &&
+        activity.payload !== null &&
+        (activity.payload as Record<string, unknown>).requestId === "approval-request-1",
+    );
+    expect(approvalFailure?.payload).toMatchObject({
+      requestId: "approval-request-1",
+      detail: "Provider session exited before response could be submitted.",
+    });
+
+    const userInputFailure = thread.activities.find(
+      (activity: ProviderRuntimeTestActivity) =>
+        activity.kind === "provider.user-input.respond.failed" &&
+        typeof activity.payload === "object" &&
+        activity.payload !== null &&
+        (activity.payload as Record<string, unknown>).requestId === "user-input-request-1",
+    );
+    expect(userInputFailure?.payload).toMatchObject({
+      requestId: "user-input-request-1",
+      detail: "Provider session exited before response could be submitted.",
+    });
   });
 
   it("does not duplicate assistant completion when item.completed is followed by turn.completed", async () => {

@@ -39,6 +39,7 @@ import { deepMerge } from "@t3tools/shared/Struct";
 
 const CLIENT_SETTINGS_STORAGE_KEY = "t3code:client-settings:v1";
 const OLD_SETTINGS_KEY = "t3code:app-settings:v1";
+let legacySettingsMigratedThisSession = false;
 
 // ── Key sets for routing patches ─────────────────────────────────────
 
@@ -232,9 +233,11 @@ export function buildLegacyClientSettingsMigrationPatch(
  */
 export function migrateLocalSettingsToServer(): void {
   if (typeof window === "undefined") return;
+  if (legacySettingsMigratedThisSession) return;
 
   const raw = localStorage.getItem(OLD_SETTINGS_KEY);
   if (!raw) return;
+  legacySettingsMigratedThisSession = true;
 
   try {
     const old = JSON.parse(raw);

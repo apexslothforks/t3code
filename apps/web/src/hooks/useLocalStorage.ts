@@ -59,13 +59,18 @@ export function useLocalStorage<T, E>(
   initialValue: T,
   schema: Schema.Codec<T, E>,
 ): [T, (value: T | ((val: T) => T)) => void] {
+  const lastRawValueRef = useRef<string | null>(null);
+
   // Get the initial value from localStorage or use the provided initialValue
   const [storedValue, setStoredValue] = useState<T>(() => {
     try {
-      const item = getLocalStorageItem(key, schema);
+      const raw = isomorphicLocalStorage.getItem(key);
+      lastRawValueRef.current = raw;
+      const item = raw ? decode(schema, raw) : null;
       return item ?? initialValue;
     } catch (error) {
       console.error("[LOCALSTORAGE] Error:", error);
+      lastRawValueRef.current = null;
       return initialValue;
     }
   });
@@ -76,11 +81,16 @@ export function useLocalStorage<T, E>(
       try {
         setStoredValue((prev) => {
           const valueToStore = typeof value === "function" ? (value as (val: T) => T)(prev) : value;
-          if (valueToStore === null) {
+          const nextRawValue = valueToStore === null ? null : encode(schema, valueToStore);
+          if (nextRawValue === lastRawValueRef.current) {
+            return prev;
+          }
+          if (nextRawValue === null) {
             removeLocalStorageItem(key);
           } else {
-            setLocalStorageItem(key, valueToStore, schema);
+            isomorphicLocalStorage.setItem(key, nextRawValue);
           }
+          lastRawValueRef.current = nextRawValue;
           // Dispatch event after state update completes to avoid nested state updates
           queueMicrotask(() => dispatchLocalStorageChange(key));
           return valueToStore;
@@ -99,7 +109,9 @@ export function useLocalStorage<T, E>(
     if (prevKeyRef.current !== key) {
       prevKeyRef.current = key;
       try {
-        const newValue = getLocalStorageItem(key, schema);
+        const raw = isomorphicLocalStorage.getItem(key);
+        lastRawValueRef.current = raw;
+        const newValue = raw ? decode(schema, raw) : null;
         setStoredValue(newValue ?? initialValue);
       } catch (error) {
         console.error("[LOCALSTORAGE] Error:", error);
@@ -111,7 +123,12 @@ export function useLocalStorage<T, E>(
   useEffect(() => {
     const syncFromStorage = () => {
       try {
-        const newValue = getLocalStorageItem(key, schema);
+        const raw = isomorphicLocalStorage.getItem(key);
+        if (raw === lastRawValueRef.current) {
+          return;
+        }
+        lastRawValueRef.current = raw;
+        const newValue = raw ? decode(schema, raw) : null;
         setStoredValue(newValue ?? initialValue);
       } catch (error) {
         console.error("[LOCALSTORAGE] Error:", error);

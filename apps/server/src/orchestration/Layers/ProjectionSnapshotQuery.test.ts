@@ -265,6 +265,13 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           runtimeMode: "full-access",
           branch: null,
           worktreePath: null,
+          autoContinue: {
+            enabled: false,
+            messages: [],
+            stopWithHeuristic: false,
+            delayMinutes: 3,
+            cooldownMinutes: 5,
+          },
           latestTurn: {
             turnId: asTurnId("turn-1"),
             state: "completed",

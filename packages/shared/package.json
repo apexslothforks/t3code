@@ -16,9 +16,17 @@
       "types": "./src/logging.ts",
       "import": "./src/logging.ts"
     },
+    "./autoContinue": {
+      "types": "./src/autoContinue.ts",
+      "import": "./src/autoContinue.ts"
+    },
     "./shell": {
       "types": "./src/shell.ts",
       "import": "./src/shell.ts"
+    },
+    "./threadInteractions": {
+      "types": "./src/threadInteractions.ts",
+      "import": "./src/threadInteractions.ts"
     },
     "./Net": {
       "types": "./src/Net.ts",

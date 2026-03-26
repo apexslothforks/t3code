@@ -1188,6 +1188,45 @@ function mapToRuntimeEvents(
     ];
   }
 
+  if (
+    event.method === "codex-swap/quota-exhausted" ||
+    event.method === "codex-swap/failover-failed"
+  ) {
+    const message =
+      asString(payload?.message) ??
+      asString(asObject(payload?.error)?.message) ??
+      event.message ??
+      "Provider runtime error";
+    return [
+      {
+        type: "runtime.error",
+        ...runtimeEventBase(event, canonicalThreadId),
+        payload: {
+          message,
+          class: "provider_error" as const,
+          ...(event.payload !== undefined ? { detail: event.payload } : {}),
+        },
+      },
+    ];
+  }
+
+  if (
+    event.method === "codex-swap/failover-started" ||
+    event.method === "codex-swap/failover-completed"
+  ) {
+    const message = asString(payload?.message) ?? event.message ?? "Wrapper failover update";
+    return [
+      {
+        type: "runtime.warning",
+        ...runtimeEventBase(event, canonicalThreadId),
+        payload: {
+          message,
+          ...(event.payload !== undefined ? { detail: event.payload } : {}),
+        },
+      },
+    ];
+  }
+
   if (event.method === "thread/realtime/started") {
     const realtimeSessionId = asString(payload?.realtimeSessionId);
     return [

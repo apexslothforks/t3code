@@ -527,13 +527,9 @@ function SidebarRail({
         event.preventDefault();
         return;
       }
-      if (resolvedResizable && open) {
-        event.preventDefault();
-        return;
-      }
       toggleSidebar();
     },
-    [onClick, open, resolvedResizable, toggleSidebar],
+    [onClick, toggleSidebar],
   );
 
   React.useEffect(() => {

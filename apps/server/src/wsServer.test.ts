@@ -344,6 +344,10 @@ async function connectAndAwaitWelcome(
   return [ws, welcome];
 }
 
+async function waitForMessage(ws: WebSocket): Promise<void> {
+  await waitForPush(ws, WS_CHANNELS.serverWelcome);
+}
+
 async function sendRequest(
   ws: WebSocket,
   method: string,
@@ -767,6 +771,95 @@ describe("WebSocket Server", () => {
     );
   });
 
+  it("returns hot in-memory auto-continue settings from getSnapshot", async () => {
+    server = await createTestServer({
+      cwd: "/test",
+    });
+    const addr = server.address();
+    const port = typeof addr === "object" && addr !== null ? addr.port : 0;
+
+    const ws = await connectWs(port);
+    connections.push(ws);
+    await waitForMessage(ws);
+
+    const createdAt = new Date().toISOString();
+    const workspaceRoot = makeTempDir("t3code-ws-auto-continue-project-");
+
+    const createProjectResponse = await sendRequest(ws, ORCHESTRATION_WS_METHODS.dispatchCommand, {
+      type: "project.create",
+      commandId: "cmd-snapshot-auto-project-create",
+      projectId: "project-auto",
+      title: "Auto Project",
+      workspaceRoot,
+      defaultModel: "gpt-5-codex",
+      createdAt,
+    });
+    expect(createProjectResponse.error).toBeUndefined();
+
+    const createThreadResponse = await sendRequest(ws, ORCHESTRATION_WS_METHODS.dispatchCommand, {
+      type: "thread.create",
+      commandId: "cmd-snapshot-auto-thread-create",
+      threadId: "thread-auto",
+      projectId: "project-auto",
+      title: "Auto Thread",
+      model: "gpt-5-codex",
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+      autoContinue: {
+        enabled: false,
+        messages: [],
+        delayMinutes: 3,
+        cooldownMinutes: 5,
+      },
+      createdAt,
+    });
+    expect(createThreadResponse.error).toBeUndefined();
+
+    const updateResponse = await sendRequest(ws, ORCHESTRATION_WS_METHODS.dispatchCommand, {
+      type: "thread.auto-continue.set",
+      commandId: "cmd-snapshot-auto-continue-set",
+      threadId: "thread-auto",
+      autoContinue: {
+        enabled: true,
+        messages: ["go on", "keep going"],
+        delayMinutes: 4,
+        cooldownMinutes: 9,
+      },
+      createdAt: new Date().toISOString(),
+    });
+    expect(updateResponse.error).toBeUndefined();
+
+    const snapshotResponse = await sendRequest(ws, ORCHESTRATION_WS_METHODS.getSnapshot);
+    expect(snapshotResponse.error).toBeUndefined();
+    const snapshot = snapshotResponse.result as {
+      threads: Array<{
+        id: string;
+        autoContinue: {
+          enabled: boolean;
+          messages: string[];
+          delayMinutes: number;
+          cooldownMinutes: number;
+        };
+      }>;
+    };
+
+    expect(snapshot.threads).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "thread-auto",
+          autoContinue: {
+            enabled: true,
+            messages: ["go on", "keep going"],
+            delayMinutes: 4,
+            cooldownMinutes: 9,
+          },
+        }),
+      ]),
+    );
+  });
+
   it("includes bootstrap ids in welcome when cwd project and thread already exist", async () => {
     const baseDir = makeTempDir("t3code-state-bootstrap-existing-");
     const { dbPath } = deriveServerPathsSync(baseDir, undefined);
@@ -873,6 +966,66 @@ describe("WebSocket Server", () => {
       settings: defaultServerSettings,
     });
     expectAvailableEditors((response.result as { availableEditors: unknown }).availableEditors);
+  });
+
+  it("includes active provider session accounts in server.getConfig", async () => {
+    const providerService: ProviderServiceShape = {
+      startSession: () => Effect.die(new Error("Unsupported provider call in test")) as never,
+      sendTurn: () => Effect.die(new Error("Unsupported provider call in test")) as never,
+      interruptTurn: () => Effect.die(new Error("Unsupported provider call in test")) as never,
+      respondToRequest: () => Effect.die(new Error("Unsupported provider call in test")) as never,
+      respondToUserInput: () => Effect.die(new Error("Unsupported provider call in test")) as never,
+      stopSession: () => Effect.die(new Error("Unsupported provider call in test")) as never,
+      listSessions: () =>
+        Effect.succeed([
+          {
+            provider: "codex",
+            status: "ready",
+            runtimeMode: "full-access",
+            threadId: asThreadId("thread-account-hint"),
+            createdAt: "2026-03-08T00:00:00.000Z",
+            updatedAt: "2026-03-08T00:00:00.000Z",
+            account: {
+              type: "chatgpt",
+              label: "work@example.com",
+              email: "work@example.com",
+              planType: "pro",
+            },
+          },
+        ]),
+      getCapabilities: () => Effect.succeed({ sessionModelSwitch: "in-session" }),
+      rollbackConversation: () =>
+        Effect.die(new Error("Unsupported provider call in test")) as never,
+      streamEvents: Stream.empty,
+    };
+    const providerLayer = Layer.succeed(ProviderService, providerService);
+
+    server = await createTestServer({ cwd: "/my/workspace", providerLayer });
+    const addr = server.address();
+    const port = typeof addr === "object" && addr !== null ? addr.port : 0;
+
+    const ws = await connectWs(port);
+    connections.push(ws);
+    await waitForMessage(ws);
+
+    const response = await sendRequest(ws, WS_METHODS.serverGetConfig);
+    expect(response.error).toBeUndefined();
+    expect(response.result).toEqual(
+      expect.objectContaining({
+        activeProviderSessions: [
+          {
+            threadId: "thread-account-hint",
+            provider: "codex",
+            account: {
+              type: "chatgpt",
+              label: "work@example.com",
+              email: "work@example.com",
+              planType: "pro",
+            },
+          },
+        ],
+      }),
+    );
   });
 
   it("bootstraps default keybindings file when missing", async () => {
@@ -1241,6 +1394,12 @@ describe("WebSocket Server", () => {
       interactionMode: "default",
       branch: null,
       worktreePath: null,
+      autoContinue: {
+        enabled: false,
+        messages: [],
+        delayMinutes: 3,
+        cooldownMinutes: 5,
+      },
       createdAt,
     });
     expect(createThreadResponse.error).toBeUndefined();
@@ -1326,6 +1485,12 @@ describe("WebSocket Server", () => {
       interactionMode: "default",
       branch: null,
       worktreePath: null,
+      autoContinue: {
+        enabled: false,
+        messages: [],
+        delayMinutes: 3,
+        cooldownMinutes: 5,
+      },
       createdAt,
     });
     expect(createThreadResponse.error).toBeUndefined();

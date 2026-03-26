@@ -304,6 +304,13 @@ describe("CheckpointReactor", () => {
         runtimeMode: "approval-required",
         branch: null,
         worktreePath: options?.threadWorktreePath ?? cwd,
+        autoContinue: {
+          enabled: false,
+          messages: [],
+          stopWithHeuristic: false,
+          delayMinutes: 3,
+          cooldownMinutes: 5,
+        },
         createdAt,
       }),
     );

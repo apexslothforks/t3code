@@ -1,4 +1,6 @@
 import {
+  AUTO_CONTINUE_DEFAULT_COOLDOWN_MINUTES,
+  AUTO_CONTINUE_DEFAULT_DELAY_MINUTES,
   ChatAttachment,
   IsoDateTime,
   MessageId,
@@ -18,6 +20,7 @@ import {
   type OrchestrationThread,
   type OrchestrationThreadActivity,
   ModelSelection,
+  ThreadAutoContinueSettings,
 } from "@t3tools/contracts";
 import { Effect, Layer, Schema, Struct } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -56,10 +59,18 @@ const ProjectionThreadMessageDbRowSchema = ProjectionThreadMessage.mapFields(
     attachments: Schema.NullOr(Schema.fromJsonString(Schema.Array(ChatAttachment))),
   }),
 );
+const DISABLED_AUTO_CONTINUE_JSON = JSON.stringify({
+  enabled: false,
+  messages: [],
+  stopWithHeuristic: false,
+  delayMinutes: AUTO_CONTINUE_DEFAULT_DELAY_MINUTES,
+  cooldownMinutes: AUTO_CONTINUE_DEFAULT_COOLDOWN_MINUTES,
+});
 const ProjectionThreadProposedPlanDbRowSchema = ProjectionThreadProposedPlan;
 const ProjectionThreadDbRowSchema = ProjectionThread.mapFields(
   Struct.assign({
     modelSelection: Schema.fromJsonString(ModelSelection),
+    autoContinue: Schema.fromJsonString(ThreadAutoContinueSettings),
   }),
 );
 const ProjectionThreadActivityDbRowSchema = ProjectionThreadActivity.mapFields(
@@ -169,6 +180,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           model_selection_json AS "modelSelection",
           runtime_mode AS "runtimeMode",
           interaction_mode AS "interactionMode",
+          COALESCE(auto_continue_json, ${DISABLED_AUTO_CONTINUE_JSON}) AS "autoContinue",
           branch,
           worktree_path AS "worktreePath",
           latest_turn_id AS "latestTurnId",

@@ -2,6 +2,7 @@ import {
   ApprovalRequestId,
   type AssistantDeliveryMode,
   CommandId,
+  EventId,
   MessageId,
   type OrchestrationEvent,
   type OrchestrationProposedPlanId,
@@ -15,6 +16,10 @@ import {
 } from "@t3tools/contracts";
 import { Cache, Cause, Duration, Effect, Layer, Option, Stream } from "effect";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
+import {
+  derivePendingApprovals,
+  derivePendingUserInputs,
+} from "@t3tools/shared/threadInteractions";
 
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
@@ -1172,6 +1177,54 @@ const make = Effect.gen(function* () {
       }
 
       if (event.type === "session.exited") {
+        const pendingApprovals = derivePendingApprovals(thread.activities);
+        const pendingUserInputs = derivePendingUserInputs(thread.activities);
+        yield* Effect.forEach(
+          pendingApprovals,
+          (approval) =>
+            orchestrationEngine.dispatch({
+              type: "thread.activity.append",
+              commandId: providerCommandId(event, "approval-stale-after-session-exit"),
+              threadId: thread.id,
+              activity: {
+                id: EventId.makeUnsafe(crypto.randomUUID()),
+                tone: "error",
+                kind: "provider.approval.respond.failed",
+                summary: "Provider approval response failed",
+                payload: {
+                  requestId: approval.requestId,
+                  detail: "Provider session exited before response could be submitted.",
+                },
+                turnId: null,
+                createdAt: now,
+              },
+              createdAt: now,
+            }),
+          { concurrency: 1 },
+        ).pipe(Effect.asVoid);
+        yield* Effect.forEach(
+          pendingUserInputs,
+          (request) =>
+            orchestrationEngine.dispatch({
+              type: "thread.activity.append",
+              commandId: providerCommandId(event, "user-input-stale-after-session-exit"),
+              threadId: thread.id,
+              activity: {
+                id: EventId.makeUnsafe(crypto.randomUUID()),
+                tone: "error",
+                kind: "provider.user-input.respond.failed",
+                summary: "Provider user input response failed",
+                payload: {
+                  requestId: request.requestId,
+                  detail: "Provider session exited before response could be submitted.",
+                },
+                turnId: null,
+                createdAt: now,
+              },
+              createdAt: now,
+            }),
+          { concurrency: 1 },
+        ).pipe(Effect.asVoid);
         yield* clearTurnStateForSession(thread.id);
       }
 

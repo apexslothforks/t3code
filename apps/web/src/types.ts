@@ -5,6 +5,7 @@ import type {
   OrchestrationSessionStatus,
   OrchestrationThreadActivity,
   ProjectScript as ContractProjectScript,
+  ThreadAutoContinueSettings,
   ThreadId,
   ProjectId,
   TurnId,
@@ -96,6 +97,7 @@ export interface Thread {
   modelSelection: ModelSelection;
   runtimeMode: RuntimeMode;
   interactionMode: ProviderInteractionMode;
+  autoContinue?: ThreadAutoContinueSettings | undefined;
   session: ThreadSession | null;
   messages: ChatMessage[];
   proposedPlans: ProposedPlan[];
