@@ -89,8 +89,6 @@ import PlanSidebar from "./PlanSidebar";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
 import {
   BotIcon,
-  CheckIcon,
-  Clock3Icon,
   ChevronDownIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
@@ -99,10 +97,8 @@ import {
   LockIcon,
   LockOpenIcon,
   XIcon,
-  ZapIcon,
 } from "lucide-react";
 import { Button } from "./ui/button";
-import { Input } from "./ui/input";
 import { Separator } from "./ui/separator";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "./ui/menu";
 import { cn, randomUUID } from "~/lib/utils";
@@ -187,6 +183,7 @@ import {
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { buildQuickAutomationPreset, extractQuickAutomationTask } from "../automationPreset";
 import { deriveAutoContinueStatusSnapshot } from "../automationStatus";
+import { AutomationToolbar } from "./AutomationToolbar";
 
 const ATTACHMENT_PREVIEW_HANDOFF_TTL_MS = 5000;
 const IMAGE_SIZE_LIMIT_LABEL = `${Math.round(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES / (1024 * 1024))}MB`;
@@ -215,13 +212,6 @@ function formatOutgoingPrompt(params: {
 const COMPOSER_PATH_QUERY_DEBOUNCE_MS = 120;
 const SCRIPT_TERMINAL_COLS = 120;
 const SCRIPT_TERMINAL_ROWS = 30;
-
-function formatCompactCountdown(durationMs: number): string {
-  const totalSeconds = Math.max(0, Math.ceil(durationMs / 1_000));
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return `${minutes}:${String(seconds).padStart(2, "0")}`;
-}
 
 const extendReplacementRangeForTrailingSpace = (
   text: string,
@@ -341,7 +331,6 @@ export default function ChatView({ threadId }: ChatViewProps) {
     >
   >(new Map());
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
-  const [quickAutomationTask, setQuickAutomationTask] = useState("");
   const [automationPanelOpen, setAutomationPanelOpen] = useState(false);
   const [automationPanelDefaultTab, setAutomationPanelDefaultTab] =
     useState<AutomationPanelTab>("auto-continue");
@@ -564,18 +553,6 @@ export default function ChatView({ threadId }: ChatViewProps) {
         : null,
     [activeThread, nowTick],
   );
-  const activeAutomationCountdownLabel = useMemo(() => {
-    if (!activeAutomationStatus) {
-      return null;
-    }
-    if (activeAutomationStatus.blockedBy === "approval") {
-      return "approval";
-    }
-    if (activeAutomationStatus.blockedBy === "user-input") {
-      return "input";
-    }
-    return formatCompactCountdown(activeAutomationStatus.remainingMs);
-  }, [activeAutomationStatus]);
   const activeContextWindow = useMemo(
     () => deriveLatestContextWindowSnapshot(activeThread?.activities ?? []),
     [activeThread?.activities],
@@ -2869,53 +2846,46 @@ export default function ChatView({ threadId }: ChatViewProps) {
     [isLocalDraftThread, serverThread, setDraftThreadContext, setStoreThreadAutoContinue, threadId],
   );
 
-  const onApplyQuickAutomation = useCallback(async () => {
-    const api = readNativeApi();
-    const task = quickAutomationTask.trim();
-    if (!activeThread || task.length === 0) {
-      return;
-    }
-
-    try {
-      await applyAutomationSettings(
-        buildQuickAutomationPreset({
-          task,
-          cooldownMinutes: normalizedAutoContinue.cooldownMinutes,
-        }),
-      );
-      if (api && isServerThread) {
-        await api.orchestration.dispatchCommand({
-          type: "thread.meta.update",
-          commandId: newCommandId(),
-          threadId: activeThread.id,
-          title: truncateTitle(task),
-        });
-        syncServerReadModel(await api.orchestration.getSnapshot());
+  const onApplyQuickAutomation = useCallback(
+    async (task: string) => {
+      const api = readNativeApi();
+      if (!activeThread || task.length === 0) {
+        return;
       }
-      setQuickAutomationTask("");
-    } catch (error) {
-      toastManager.add({
-        type: "error",
-        title: "Could not enable automation",
-        description: error instanceof Error ? error.message : "An error occurred.",
-      });
-    }
-  }, [
-    activeThread,
-    applyAutomationSettings,
-    isServerThread,
-    normalizedAutoContinue.cooldownMinutes,
-    quickAutomationTask,
-    syncServerReadModel,
-  ]);
 
-  const openDelayedSendDialog = useCallback(() => {
-    if (delayedSendDisabledReason) {
-      return;
-    }
-    setAutomationPanelDefaultTab("schedule-send");
-    setAutomationPanelOpen(true);
-  }, [delayedSendDisabledReason]);
+      try {
+        await applyAutomationSettings(
+          buildQuickAutomationPreset({
+            task,
+            cooldownMinutes: normalizedAutoContinue.cooldownMinutes,
+          }),
+        );
+        if (api && isServerThread) {
+          await api.orchestration.dispatchCommand({
+            type: "thread.meta.update",
+            commandId: newCommandId(),
+            threadId: activeThread.id,
+            title: truncateTitle(task),
+          });
+          syncServerReadModel(await api.orchestration.getSnapshot());
+        }
+      } catch (error) {
+        toastManager.add({
+          type: "error",
+          title: "Could not enable automation",
+          description: error instanceof Error ? error.message : "An error occurred.",
+        });
+        throw error;
+      }
+    },
+    [
+      activeThread,
+      applyAutomationSettings,
+      isServerThread,
+      normalizedAutoContinue.cooldownMinutes,
+      syncServerReadModel,
+    ],
+  );
 
   const cancelDelayedSend = useCallback(async () => {
     const api = readNativeApi();
@@ -4263,101 +4233,16 @@ export default function ChatView({ threadId }: ChatViewProps) {
                         data-chat-composer-actions="right"
                         className="flex shrink-0 items-center gap-2"
                       >
-                        <div className="hidden min-w-0 items-center gap-1.5 md:flex">
-                          <div className="w-36 lg:w-44">
-                            <Input
-                              size="sm"
-                              value={quickAutomationTask}
-                              onChange={(event) => setQuickAutomationTask(event.target.value)}
-                              onKeyDown={(event) => {
-                                if (event.key !== "Enter") {
-                                  return;
-                                }
-                                event.preventDefault();
-                                void onApplyQuickAutomation();
-                              }}
-                              placeholder={quickAutomationPlaceholder}
-                              disabled={!isServerThread || isConnecting}
-                              aria-label="Quick automation task"
-                            />
-                          </div>
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant={normalizedAutoContinue.enabled ? "default" : "ghost"}
-                            className="h-8 w-8 rounded-full p-0"
-                            onClick={() => void onApplyQuickAutomation()}
-                            disabled={
-                              !isServerThread ||
-                              isConnecting ||
-                              quickAutomationTask.trim().length === 0
-                            }
-                            title="Enable automation with this task"
-                            aria-label="Enable automation with this task"
-                          >
-                            {normalizedAutoContinue.enabled ? (
-                              <CheckIcon className="size-3.5" />
-                            ) : (
-                              <ZapIcon className="size-3.5" />
-                            )}
-                          </Button>
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="ghost"
-                            className="h-8 gap-1.5 rounded-full px-2.5 text-muted-foreground/80"
-                            onClick={() => openAutomationPanel("auto-continue")}
-                            disabled={!isServerThread || isConnecting}
-                            title={
-                              !isServerThread
-                                ? "Automation settings are available after the thread starts"
-                                : "Automation settings"
-                            }
-                            aria-label="Automation settings"
-                          >
-                            <ZapIcon className="size-3.5" />
-                            <span className="text-xs">Auto</span>
-                          </Button>
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="ghost"
-                            className="h-8 gap-1.5 rounded-full px-2.5 text-muted-foreground/80"
-                            onClick={openDelayedSendDialog}
-                            disabled={delayedSendDisabledReason !== null}
-                            title={
-                              delayedSendDisabledReason ?? "Schedule this message to send later"
-                            }
-                            aria-label="Send later"
-                          >
-                            <Clock3Icon className="size-3.5" />
-                            <span className="text-xs">Later</span>
-                          </Button>
-                          {activeAutomationStatus ? (
-                            <div className="hidden w-28 flex-col gap-1 lg:flex">
-                              <div className="flex items-center justify-between text-[10px] text-muted-foreground/80">
-                                <span>{`Auto ${activeAutomationStatus.sentCount + 1}`}</span>
-                                <span>{activeAutomationCountdownLabel}</span>
-                              </div>
-                              <div className="h-1.5 overflow-hidden rounded-full bg-border/70">
-                                <div
-                                  className={cn(
-                                    "h-full rounded-full transition-[width] duration-700 ease-out",
-                                    activeAutomationStatus.blockedBy === null
-                                      ? "bg-primary/80"
-                                      : "bg-amber-500/70",
-                                  )}
-                                  style={{
-                                    width: `${Math.max(
-                                      4,
-                                      Math.round(activeAutomationStatus.progressRatio * 100),
-                                    )}%`,
-                                  }}
-                                />
-                              </div>
-                            </div>
-                          ) : null}
-                        </div>
+                        <AutomationToolbar
+                          isLocalDraftThread={isLocalDraftThread}
+                          isConnecting={isConnecting}
+                          automationStatus={activeAutomationStatus}
+                          automationEnabled={normalizedAutoContinue.enabled}
+                          quickAutomationPlaceholder={quickAutomationPlaceholder}
+                          delayedSendDisabledReason={delayedSendDisabledReason}
+                          onApplyQuickAutomation={onApplyQuickAutomation}
+                          onOpenAutomationPanel={openAutomationPanel}
+                        />
                         {activeContextWindow ? (
                           <ContextWindowMeter usage={activeContextWindow} />
                         ) : null}
