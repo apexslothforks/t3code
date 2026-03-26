@@ -10,12 +10,14 @@ import {
   ProviderModelOptions,
   RuntimeMode,
   type ServerProvider,
+  ThreadAutoContinueSettings,
   ThreadId,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import * as Equal from "effect/Equal";
 import { DeepMutable } from "effect/Types";
 import { getDefaultModel, normalizeModelSlug } from "@t3tools/shared/model";
+import { normalizeAutoContinueSettings } from "@t3tools/shared/autoContinue";
 import { useMemo } from "react";
 import { getLocalStorageItem } from "./hooks/useLocalStorage";
 import { resolveAppModelSelection } from "./modelSelection";
@@ -133,6 +135,7 @@ const PersistedDraftThreadState = Schema.Struct({
   createdAt: Schema.String,
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
+  autoContinue: Schema.optionalKey(ThreadAutoContinueSettings),
   branch: Schema.NullOr(Schema.String),
   worktreePath: Schema.NullOr(Schema.String),
   envMode: DraftThreadEnvModeSchema,
@@ -172,6 +175,7 @@ export interface DraftThreadState {
   createdAt: string;
   runtimeMode: RuntimeMode;
   interactionMode: ProviderInteractionMode;
+  autoContinue?: ThreadAutoContinueSettings | undefined;
   branch: string | null;
   worktreePath: string | null;
   envMode: DraftThreadEnvMode;
@@ -199,6 +203,7 @@ interface ComposerDraftStoreState {
       envMode?: DraftThreadEnvMode;
       runtimeMode?: RuntimeMode;
       interactionMode?: ProviderInteractionMode;
+      autoContinue?: ThreadAutoContinueSettings;
     },
   ) => void;
   setDraftThreadContext: (
@@ -211,6 +216,7 @@ interface ComposerDraftStoreState {
       envMode?: DraftThreadEnvMode;
       runtimeMode?: RuntimeMode;
       interactionMode?: ProviderInteractionMode;
+      autoContinue?: ThreadAutoContinueSettings;
     },
   ) => void;
   clearProjectDraftThreadId: (projectId: ProjectId) => void;
@@ -783,6 +789,9 @@ function normalizePersistedDraftThreads(
           candidateDraftThread.interactionMode === "default"
             ? candidateDraftThread.interactionMode
             : DEFAULT_INTERACTION_MODE,
+        autoContinue: normalizeAutoContinueSettings(
+          candidateDraftThread.autoContinue as ThreadAutoContinueSettings | null | undefined,
+        ),
         branch: typeof branch === "string" ? branch : null,
         worktreePath: normalizedWorktreePath,
         envMode: normalizeDraftThreadEnvMode(candidateDraftThread.envMode, normalizedWorktreePath),
@@ -811,6 +820,7 @@ function normalizePersistedDraftThreads(
             createdAt: new Date().toISOString(),
             runtimeMode: DEFAULT_RUNTIME_MODE,
             interactionMode: DEFAULT_INTERACTION_MODE,
+            autoContinue: normalizeAutoContinueSettings(undefined),
             branch: null,
             worktreePath: null,
             envMode: "local",
@@ -1037,7 +1047,23 @@ function partializeComposerDraftStoreState(
   }
   return {
     draftsByThreadId: persistedDraftsByThreadId,
-    draftThreadsByThreadId: state.draftThreadsByThreadId,
+    draftThreadsByThreadId: Object.fromEntries(
+      Object.entries(state.draftThreadsByThreadId).map(([threadId, draftThread]) => [
+        threadId,
+        {
+          projectId: draftThread.projectId,
+          createdAt: draftThread.createdAt,
+          runtimeMode: draftThread.runtimeMode,
+          interactionMode: draftThread.interactionMode,
+          ...(draftThread.autoContinue !== undefined
+            ? { autoContinue: draftThread.autoContinue }
+            : {}),
+          branch: draftThread.branch,
+          worktreePath: draftThread.worktreePath,
+          envMode: draftThread.envMode,
+        },
+      ]),
+    ) as PersistedComposerDraftStoreState["draftThreadsByThreadId"],
     projectDraftThreadIdByProjectId: state.projectDraftThreadIdByProjectId,
     stickyModelSelectionByProvider: state.stickyModelSelectionByProvider,
     stickyActiveProvider: state.stickyActiveProvider,
@@ -1301,6 +1327,10 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
               options?.interactionMode ??
               existingThread?.interactionMode ??
               DEFAULT_INTERACTION_MODE,
+            autoContinue:
+              options?.autoContinue ??
+              existingThread?.autoContinue ??
+              normalizeAutoContinueSettings(undefined),
             branch:
               options?.branch === undefined
                 ? (existingThread?.branch ?? null)
@@ -1317,6 +1347,7 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
             existingThread.createdAt === nextDraftThread.createdAt &&
             existingThread.runtimeMode === nextDraftThread.runtimeMode &&
             existingThread.interactionMode === nextDraftThread.interactionMode &&
+            Equal.equals(existingThread.autoContinue, nextDraftThread.autoContinue) &&
             existingThread.branch === nextDraftThread.branch &&
             existingThread.worktreePath === nextDraftThread.worktreePath &&
             existingThread.envMode === nextDraftThread.envMode;
@@ -1375,6 +1406,7 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
                 : options.createdAt || existing.createdAt,
             runtimeMode: options.runtimeMode ?? existing.runtimeMode,
             interactionMode: options.interactionMode ?? existing.interactionMode,
+            autoContinue: options.autoContinue ?? existing.autoContinue,
             branch: options.branch === undefined ? existing.branch : (options.branch ?? null),
             worktreePath: nextWorktreePath,
             envMode:
@@ -1385,6 +1417,7 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
             nextDraftThread.createdAt === existing.createdAt &&
             nextDraftThread.runtimeMode === existing.runtimeMode &&
             nextDraftThread.interactionMode === existing.interactionMode &&
+            Equal.equals(nextDraftThread.autoContinue, existing.autoContinue) &&
             nextDraftThread.branch === existing.branch &&
             nextDraftThread.worktreePath === existing.worktreePath &&
             nextDraftThread.envMode === existing.envMode;

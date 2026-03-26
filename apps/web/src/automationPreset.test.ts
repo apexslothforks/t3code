@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildQuickAutomationMessage,
   buildQuickAutomationPreset,
+  extractQuickAutomationTask,
   QUICK_AUTOMATION_DELAY_MINUTES,
   QUICK_AUTOMATION_FALLBACK_COOLDOWN_MINUTES,
 } from "./automationPreset";
@@ -42,5 +43,19 @@ describe("buildQuickAutomationPreset", () => {
         cooldownMinutes: 0,
       }).cooldownMinutes,
     ).toBe(QUICK_AUTOMATION_FALLBACK_COOLDOWN_MINUTES);
+  });
+});
+
+describe("extractQuickAutomationTask", () => {
+  it("parses the task back out of the quick preset wording", () => {
+    expect(
+      extractQuickAutomationTask(
+        "work on stabilize automation, use your best jugment to push this forward, check children to work on, and rebase often",
+      ),
+    ).toBe("stabilize automation");
+  });
+
+  it("returns null for unrelated text", () => {
+    expect(extractQuickAutomationTask("do something else")).toBeNull();
   });
 });

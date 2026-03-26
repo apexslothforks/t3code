@@ -45,6 +45,27 @@ interface AutomationTimerSnapshot {
   readonly blockedBy: "approval" | "user-input" | null;
 }
 
+type SettingsResetState = {
+  settingsKey: string;
+  resetAtMs: number;
+};
+
+export function resolveEffectiveAutoContinueDelayResetAt(input: {
+  activityDelayResetAt?: string | null | undefined;
+  localDelayResetAtMs?: number | null | undefined;
+}): string | undefined {
+  const localDelayResetAt =
+    typeof input.localDelayResetAtMs === "number" && Number.isFinite(input.localDelayResetAtMs)
+      ? new Date(input.localDelayResetAtMs).toISOString()
+      : undefined;
+  if (input.activityDelayResetAt && localDelayResetAt) {
+    return Date.parse(input.activityDelayResetAt) > Date.parse(localDelayResetAt)
+      ? input.activityDelayResetAt
+      : localDelayResetAt;
+  }
+  return input.activityDelayResetAt ?? localDelayResetAt;
+}
+
 function compareMessagesByOrder(left: ChatMessage, right: ChatMessage): number {
   return left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id);
 }
@@ -114,6 +135,7 @@ function deriveAutomationTimerSnapshot(input: {
   activities: ReadonlyArray<Thread["activities"][number]>;
   session: Pick<ThreadSession, "orchestrationStatus" | "activeTurnId"> | null;
   autoContinue: Thread["autoContinue"];
+  localDelayResetAtMs?: number | null | undefined;
 }): AutomationTimerSnapshot | null {
   const settings = normalizeAutoContinueSettings(input.autoContinue);
   if (!settings.enabled || settings.messages.length === 0) {
@@ -158,10 +180,15 @@ function deriveAutomationTimerSnapshot(input: {
     return null;
   }
 
+  const effectiveDelayResetAt = resolveEffectiveAutoContinueDelayResetAt({
+    activityDelayResetAt: findLatestAutoContinueDelayResetActivity(input.activities)?.createdAt,
+    localDelayResetAtMs: input.localDelayResetAtMs,
+  });
+
   const dispatchAtMs = getAutoContinueDispatchAtMs({
     completedAt: latestAssistantMessage.completedAt,
     lastAutoContinueSentAt: findLatestAutoContinueSentActivity(input.activities)?.createdAt,
-    delayResetAt: findLatestAutoContinueDelayResetActivity(input.activities)?.createdAt,
+    delayResetAt: effectiveDelayResetAt,
     settings,
   });
   if (!Number.isFinite(dispatchAtMs)) {
@@ -170,7 +197,7 @@ function deriveAutomationTimerSnapshot(input: {
 
   const startedAtMs = getAutoContinueDelayAnchorAtMs({
     completedAt: latestAssistantMessage.completedAt,
-    delayResetAt: findLatestAutoContinueDelayResetActivity(input.activities)?.createdAt,
+    delayResetAt: effectiveDelayResetAt,
   });
 
   return {
@@ -206,6 +233,7 @@ export function AutoContinueRunner() {
   );
   const retryStateRef = useRef(new Map<ThreadId, RetryState>());
   const recentDispatchRef = useRef(new Map<ThreadId, RecentDispatchState>());
+  const settingsResetRef = useRef(new Map<ThreadId, SettingsResetState>());
   const processingRef = useRef(false);
   const rerunRef = useRef(false);
 
@@ -213,7 +241,27 @@ export function AutoContinueRunner() {
     if (candidateThreads.length === 0) {
       retryStateRef.current.clear();
       recentDispatchRef.current.clear();
+      settingsResetRef.current.clear();
       return;
+    }
+
+    const nowMs = Date.now();
+    const liveThreadIds = new Set(candidateThreads.map((thread) => thread.id));
+    for (const [threadId] of settingsResetRef.current) {
+      if (!liveThreadIds.has(threadId)) {
+        settingsResetRef.current.delete(threadId);
+      }
+    }
+    for (const thread of candidateThreads) {
+      const normalizedSettings = normalizeAutoContinueSettings(thread.autoContinue);
+      const settingsKey = JSON.stringify(normalizedSettings);
+      const previous = settingsResetRef.current.get(thread.id);
+      if (!previous || previous.settingsKey !== settingsKey) {
+        settingsResetRef.current.set(thread.id, {
+          settingsKey,
+          resetAtMs: nowMs,
+        });
+      }
     }
 
     let disposed = false;
@@ -248,6 +296,7 @@ export function AutoContinueRunner() {
               activities: thread.activities,
               session: thread.session,
               autoContinue: thread.autoContinue,
+              localDelayResetAtMs: settingsResetRef.current.get(thread.id)?.resetAtMs,
             });
             if (!timer) {
               retryStateRef.current.delete(thread.id);

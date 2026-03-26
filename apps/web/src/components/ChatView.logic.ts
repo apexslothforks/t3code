@@ -1,4 +1,5 @@
 import { ProjectId, type ModelSelection, type ThreadId } from "@t3tools/contracts";
+import { normalizeAutoContinueSettings } from "@t3tools/shared/autoContinue";
 import { type ChatMessage, type Thread } from "../types";
 import { randomUUID } from "~/lib/utils";
 import { type ComposerImageAttachment, type DraftThreadState } from "../composerDraftStore";
@@ -26,6 +27,7 @@ export function buildLocalDraftThread(
     projectId: draftThread.projectId,
     title: "New thread",
     modelSelection: fallbackModelSelection,
+    autoContinue: normalizeAutoContinueSettings(draftThread.autoContinue),
     runtimeMode: draftThread.runtimeMode,
     interactionMode: draftThread.interactionMode,
     session: null,

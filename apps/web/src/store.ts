@@ -2,6 +2,7 @@ import { Fragment, type ReactNode, createElement, useEffect } from "react";
 import {
   type ProviderKind,
   ThreadId,
+  type ThreadAutoContinueSettings,
   type OrchestrationReadModel,
   type OrchestrationSessionStatus,
 } from "@t3tools/contracts";
@@ -422,6 +423,20 @@ export function setThreadBranch(
   return threads === state.threads ? state : { ...state, threads };
 }
 
+export function setThreadAutoContinue(
+  state: AppState,
+  threadId: ThreadId,
+  autoContinue: ThreadAutoContinueSettings,
+): AppState {
+  const threads = updateThread(state.threads, threadId, (thread) => {
+    if (JSON.stringify(thread.autoContinue ?? null) === JSON.stringify(autoContinue)) {
+      return thread;
+    }
+    return { ...thread, autoContinue };
+  });
+  return threads === state.threads ? state : { ...state, threads };
+}
+
 // ── Zustand store ────────────────────────────────────────────────────
 
 interface AppStore extends AppState {
@@ -433,6 +448,7 @@ interface AppStore extends AppState {
   reorderProjects: (draggedProjectId: Project["id"], targetProjectId: Project["id"]) => void;
   setError: (threadId: ThreadId, error: string | null) => void;
   setThreadBranch: (threadId: ThreadId, branch: string | null, worktreePath: string | null) => void;
+  setThreadAutoContinue: (threadId: ThreadId, autoContinue: ThreadAutoContinueSettings) => void;
 }
 
 export const useStore = create<AppStore>((set) => ({
@@ -449,6 +465,8 @@ export const useStore = create<AppStore>((set) => ({
   setError: (threadId, error) => set((state) => setError(state, threadId, error)),
   setThreadBranch: (threadId, branch, worktreePath) =>
     set((state) => setThreadBranch(state, threadId, branch, worktreePath)),
+  setThreadAutoContinue: (threadId, autoContinue) =>
+    set((state) => setThreadAutoContinue(state, threadId, autoContinue)),
 }));
 
 // Persist state changes with debouncing to avoid localStorage thrashing

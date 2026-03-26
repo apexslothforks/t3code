@@ -1,6 +1,7 @@
 import {
   ArrowLeftIcon,
   ArrowUpDownIcon,
+  CheckIcon,
   ChevronRightIcon,
   FolderIcon,
   GitPullRequestIcon,
@@ -36,6 +37,7 @@ import {
   type GitStatusResult,
   type ResolvedKeybindingsConfig,
 } from "@t3tools/contracts";
+import { normalizeAutoContinueSettings } from "@t3tools/shared/autoContinue";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocation, useNavigate, useParams } from "@tanstack/react-router";
 import {
@@ -102,6 +104,7 @@ import {
 } from "./Sidebar.logic";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { useSettings, useUpdateSettings } from "~/hooks/useSettings";
+import { buildQuickAutomationPreset } from "../automationPreset";
 
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const THREAD_PREVIEW_LIMIT = 6;
@@ -659,6 +662,39 @@ export default function Sidebar() {
     [],
   );
 
+  const toggleThreadAutomation = useCallback(
+    async (threadId: ThreadId) => {
+      const api = readNativeApi();
+      const thread = threads.find((candidate) => candidate.id === threadId);
+      if (!api || !thread) {
+        return;
+      }
+      const normalized = normalizeAutoContinueSettings(thread.autoContinue);
+      const nextAutoContinue = normalized.enabled
+        ? { ...normalized, enabled: false }
+        : buildQuickAutomationPreset({
+            task: thread.title,
+            cooldownMinutes: normalized.cooldownMinutes,
+          });
+      try {
+        await api.orchestration.dispatchCommand({
+          type: "thread.auto-continue.set",
+          commandId: newCommandId(),
+          threadId,
+          autoContinue: nextAutoContinue,
+          createdAt: new Date().toISOString(),
+        });
+      } catch (error) {
+        toastManager.add({
+          type: "error",
+          title: "Could not update automation",
+          description: error instanceof Error ? error.message : "An error occurred.",
+        });
+      }
+    },
+    [threads],
+  );
+
   /**
    * Delete a single thread: stop session, close terminal, dispatch delete,
    * clean up drafts/state, and optionally remove orphaned worktree.
@@ -1149,6 +1185,7 @@ export default function Sidebar() {
       const terminalStatus = terminalStatusFromRunningIds(
         selectThreadTerminalState(terminalStateByThreadId, thread.id).runningTerminalIds,
       );
+      const automationEnabled = normalizeAutoContinueSettings(thread.autoContinue).enabled;
 
       return (
         <SidebarMenuSubItem key={thread.id} className="w-full" data-thread-item>
@@ -1194,6 +1231,23 @@ export default function Sidebar() {
             }}
           >
             <div className="flex min-w-0 flex-1 items-center gap-1.5 text-left">
+              <button
+                type="button"
+                aria-label={automationEnabled ? "Disable automation" : "Enable automation"}
+                title={automationEnabled ? "Disable automation" : "Enable automation"}
+                className={`inline-flex size-4 shrink-0 items-center justify-center rounded-sm border transition-colors ${
+                  automationEnabled
+                    ? "border-emerald-500/60 bg-emerald-500/12 text-emerald-600 dark:text-emerald-300"
+                    : "border-border/60 text-muted-foreground/45 hover:text-muted-foreground/80"
+                }`}
+                onClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  void toggleThreadAutomation(thread.id);
+                }}
+              >
+                <CheckIcon className="size-2.5" />
+              </button>
               {prStatus && (
                 <Tooltip>
                   <TooltipTrigger
