@@ -250,6 +250,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const projects = useStore((store) => store.projects);
   const markThreadVisited = useStore((store) => store.markThreadVisited);
   const syncServerReadModel = useStore((store) => store.syncServerReadModel);
+  const dismissStoreThreadError = useStore((store) => store.dismissError);
   const setStoreThreadError = useStore((store) => store.setError);
   const setStoreThreadBranch = useStore((store) => store.setThreadBranch);
   const setStoreThreadAutoContinue = useStore((store) => store.setThreadAutoContinue);
@@ -3796,7 +3797,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
       <ProviderStatusBanner status={activeProviderStatus} />
       <ThreadErrorBanner
         error={activeThread.error}
-        onDismiss={() => setThreadError(activeThread.id, null)}
+        onDismiss={() => dismissStoreThreadError(activeThread.id)}
       />
       {/* Main content area with optional plan sidebar */}
       <div className="flex min-h-0 min-w-0 flex-1">

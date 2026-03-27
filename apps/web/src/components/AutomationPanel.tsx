@@ -1,7 +1,7 @@
 import type { ThreadAutoContinueSettings, ThreadId } from "@t3tools/contracts";
 import { normalizeAutoContinueSettings } from "@t3tools/shared/autoContinue";
 import { Clock3Icon, XIcon, ZapIcon } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Alert, AlertDescription, AlertTitle } from "./ui/alert";
 import { Button } from "./ui/button";
@@ -84,18 +84,28 @@ export function AutomationPanel({
     setSelectedTab(defaultTab);
   }, [defaultTab, open]);
 
+  // Keep a ref to the latest `currentSettings` so the init effect can read it
+  // without depending on it — we only want to snapshot settings when the dialog
+  // opens or the active thread changes, not on every background mutation.
+  const currentSettingsRef = useRef(currentSettings);
+  currentSettingsRef.current = currentSettings;
+
+  // Only initialise draft fields when the dialog opens or the active thread
+  // changes — NOT on every background `currentSettings` mutation.  Reacting to
+  // `currentSettings` caused quick-automation presets (and optimistic store
+  // updates / snapshot syncs) to silently overwrite the user's in-progress edits.
   useEffect(() => {
     if (!open) {
       return;
     }
-    const nextSettings = normalizeAutoContinueSettings(currentSettings);
+    const nextSettings = normalizeAutoContinueSettings(currentSettingsRef.current);
     setAutomationEnabledDraft(nextSettings.enabled);
     setAutomationMessagesTextDraft(nextSettings.messages.join("\n"));
     setAutomationStopWithHeuristicDraft(nextSettings.stopWithHeuristic);
     setAutomationDelayMinutesDraft(String(nextSettings.delayMinutes));
     setAutomationCooldownMinutesDraft(String(nextSettings.cooldownMinutes));
     setAutomationSaveError(null);
-  }, [currentSettings, open, threadId]);
+  }, [open, threadId]);
 
   useEffect(() => {
     if (!open) {

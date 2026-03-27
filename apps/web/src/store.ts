@@ -16,6 +16,7 @@ import { Debouncer } from "@tanstack/react-pacer";
 export interface AppState {
   projects: Project[];
   threads: Thread[];
+  dismissedErrors: Record<string, string>;
   threadsHydrated: boolean;
 }
 
@@ -35,6 +36,7 @@ const LEGACY_PERSISTED_STATE_KEYS = [
 const initialState: AppState = {
   projects: [],
   threads: [],
+  dismissedErrors: {},
   threadsHydrated: false,
 };
 const persistedExpandedProjectCwds = new Set<string>();
@@ -253,10 +255,16 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
     state.projects,
   );
   const existingThreadById = new Map(state.threads.map((thread) => [thread.id, thread] as const));
+  const dismissedErrors: Record<string, string> = {};
   const threads = readModel.threads
     .filter((thread) => thread.deletedAt === null)
     .map((thread) => {
       const existing = existingThreadById.get(thread.id);
+      const serverError = thread.session?.lastError ?? null;
+      const dismissedError = state.dismissedErrors[thread.id] ?? null;
+      if (serverError !== null && serverError === dismissedError) {
+        dismissedErrors[thread.id] = dismissedError;
+      }
       return {
         id: thread.id,
         codexThreadId: null,
@@ -308,7 +316,7 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
           createdAt: proposedPlan.createdAt,
           updatedAt: proposedPlan.updatedAt,
         })),
-        error: thread.session?.lastError ?? null,
+        error: serverError !== null && serverError === dismissedError ? null : serverError,
         createdAt: thread.createdAt,
         updatedAt: thread.updatedAt,
         latestTurn: thread.latestTurn,
@@ -348,6 +356,7 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
     ...state,
     projects,
     threads,
+    dismissedErrors,
     threadsHydrated: true,
   };
 }
@@ -430,6 +439,32 @@ export function setError(state: AppState, threadId: ThreadId, error: string | nu
   return threads === state.threads ? state : { ...state, threads };
 }
 
+export function dismissError(state: AppState, threadId: ThreadId): AppState {
+  const thread = state.threads.find((candidate) => candidate.id === threadId);
+  const dismissedError = thread?.error ?? thread?.session?.lastError ?? null;
+  if (!thread || dismissedError === null) {
+    return state;
+  }
+
+  const threads = updateThread(state.threads, threadId, (candidate) => {
+    if (candidate.error === null) return candidate;
+    return { ...candidate, error: null };
+  });
+  const previousDismissedError = state.dismissedErrors[threadId] ?? null;
+  if (threads === state.threads && previousDismissedError === dismissedError) {
+    return state;
+  }
+
+  return {
+    ...state,
+    threads,
+    dismissedErrors: {
+      ...state.dismissedErrors,
+      [threadId]: dismissedError,
+    },
+  };
+}
+
 export function setThreadBranch(
   state: AppState,
   threadId: ThreadId,
@@ -472,6 +507,7 @@ interface AppStore extends AppState {
   toggleProject: (projectId: Project["id"]) => void;
   setProjectExpanded: (projectId: Project["id"], expanded: boolean) => void;
   reorderProjects: (draggedProjectId: Project["id"], targetProjectId: Project["id"]) => void;
+  dismissError: (threadId: ThreadId) => void;
   setError: (threadId: ThreadId, error: string | null) => void;
   setThreadBranch: (threadId: ThreadId, branch: string | null, worktreePath: string | null) => void;
   setThreadAutoContinue: (threadId: ThreadId, autoContinue: ThreadAutoContinueSettings) => void;
@@ -488,6 +524,7 @@ export const useStore = create<AppStore>((set) => ({
     set((state) => setProjectExpanded(state, projectId, expanded)),
   reorderProjects: (draggedProjectId, targetProjectId) =>
     set((state) => reorderProjects(state, draggedProjectId, targetProjectId)),
+  dismissError: (threadId) => set((state) => dismissError(state, threadId)),
   setError: (threadId, error) => set((state) => setError(state, threadId, error)),
   setThreadBranch: (threadId, branch, worktreePath) =>
     set((state) => setThreadBranch(state, threadId, branch, worktreePath)),

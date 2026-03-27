@@ -22,7 +22,7 @@ import {
   isThreadReadyForDispatch,
   shouldRetryThreadDispatchError,
 } from "@t3tools/shared/threadDispatch";
-import { Effect, Fiber, Layer, Queue, Stream } from "effect";
+import { Cause, Effect, Fiber, Layer, Queue, Stream } from "effect";
 
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import {
@@ -87,6 +87,7 @@ const DELAYED_SEND_MAX_RETRIES = 3;
 const DELAYED_SEND_WAIT_POLL_MS = 1_000;
 const AUTO_CONTINUE_RETRY_DELAY_MS = 3_000;
 const AUTO_CONTINUE_MAX_RETRIES = 3;
+const AUTO_CONTINUE_DISPATCH_READY_RETRY_DELAY_MS = 10_000;
 
 const serverCommandId = (tag: string): CommandId =>
   CommandId.makeUnsafe(`server:${tag}:${crypto.randomUUID()}`);
@@ -145,6 +146,23 @@ const isThreadDispatchReady = (thread: Pick<OrchestrationThread, "activities" | 
 
 const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
+
+  const logScheduledDispatchWarning = <E, R>(
+    effect: Effect.Effect<void, E, R>,
+    message: string,
+    context: Record<string, unknown>,
+  ): Effect.Effect<void, E, R> =>
+    effect.pipe(
+      Effect.catchCause((cause) => {
+        if (Cause.hasInterruptsOnly(cause)) {
+          return Effect.failCause(cause);
+        }
+        return Effect.logWarning(message, {
+          ...context,
+          cause: Cause.pretty(cause),
+        });
+      }),
+    );
 
   const delayedSendByThreadId = new Map<ThreadId, DelayedSendCandidate>();
   const delayedSendWakeByThreadId = new Map<
@@ -637,6 +655,12 @@ const make = Effect.gen(function* () {
       yield* clearAutoContinueWake(threadId);
 
       if (!isThreadDispatchReady(thread)) {
+        yield* ensureAutoContinueWake({
+          queue,
+          threadId,
+          assistantMessageId: activeCandidate.assistantMessageId,
+          dispatchAtMs: Date.now() + AUTO_CONTINUE_DISPATCH_READY_RETRY_DELAY_MS,
+        });
         return;
       }
 
@@ -799,27 +823,49 @@ const make = Effect.gen(function* () {
 
     yield* Effect.forkScoped(
       Effect.forever(
-        Queue.take(queue).pipe(Effect.flatMap((signal) => processSignal(queue, signal))),
+        Queue.take(queue).pipe(
+          Effect.flatMap((signal) =>
+            logScheduledDispatchWarning(
+              processSignal(queue, signal),
+              "scheduled dispatch reactor failed to process signal",
+              {
+                signalType: signal.type,
+              },
+            ),
+          ),
+        ),
       ),
     );
 
     yield* Effect.forkScoped(
-      Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
-        if (
-          event.type !== "thread.activity-appended" &&
-          event.type !== "thread.auto-continue-set" &&
-          event.type !== "thread.created" &&
-          event.type !== "thread.deleted" &&
-          event.type !== "thread.delayed-send-cancelled" &&
-          event.type !== "thread.delayed-send-dispatched" &&
-          event.type !== "thread.delayed-send-scheduled" &&
-          event.type !== "thread.message-sent" &&
-          event.type !== "thread.session-set"
-        ) {
-          return Effect.void;
-        }
-        return Queue.offer(queue, event).pipe(Effect.asVoid);
-      }),
+      Effect.forever(
+        logScheduledDispatchWarning(
+          Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
+            if (
+              event.type !== "thread.activity-appended" &&
+              event.type !== "thread.auto-continue-set" &&
+              event.type !== "thread.created" &&
+              event.type !== "thread.deleted" &&
+              event.type !== "thread.delayed-send-cancelled" &&
+              event.type !== "thread.delayed-send-dispatched" &&
+              event.type !== "thread.delayed-send-scheduled" &&
+              event.type !== "thread.message-sent" &&
+              event.type !== "thread.session-set"
+            ) {
+              return Effect.void;
+            }
+            return logScheduledDispatchWarning(
+              Queue.offer(queue, event).pipe(Effect.asVoid),
+              "scheduled dispatch reactor failed to enqueue domain event",
+              {
+                eventType: event.type,
+              },
+            );
+          }),
+          "scheduled dispatch reactor domain event stream failed",
+          {},
+        ),
+      ),
     );
 
     const readModel = yield* orchestrationEngine.getReadModel();

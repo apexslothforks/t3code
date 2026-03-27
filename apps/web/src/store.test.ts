@@ -8,7 +8,13 @@ import {
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vitest";
 
-import { markThreadUnread, reorderProjects, syncServerReadModel, type AppState } from "./store";
+import {
+  dismissError,
+  markThreadUnread,
+  reorderProjects,
+  syncServerReadModel,
+  type AppState,
+} from "./store";
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE, type Thread } from "./types";
 
 function makeThread(overrides: Partial<Thread> = {}): Thread {
@@ -55,6 +61,7 @@ function makeState(thread: Thread): AppState {
     ],
     threads: [thread],
     threadsHydrated: true,
+    dismissedErrors: {},
   };
 }
 
@@ -209,6 +216,7 @@ describe("store pure functions", () => {
       ],
       threads: [],
       threadsHydrated: true,
+      dismissedErrors: {},
     };
 
     const next = reorderProjects(state, project1, project3);
@@ -304,6 +312,7 @@ describe("store read model sync", () => {
       ],
       threads: [],
       threadsHydrated: true,
+      dismissedErrors: {},
     };
     const readModel: OrchestrationReadModel = {
       snapshotSequence: 2,
@@ -360,5 +369,85 @@ describe("store read model sync", () => {
       nextMessageIndex: 0,
       nextMessageText: "keep going",
     });
+  });
+
+  it("keeps a dismissed server error hidden until the server error changes", () => {
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const initialState = makeState(
+      makeThread({
+        id: threadId,
+        error: "Quota exceeded",
+        session: {
+          provider: "codex",
+          status: "error",
+          orchestrationStatus: "error",
+          createdAt: "2026-02-27T00:00:00.000Z",
+          updatedAt: "2026-02-27T00:00:00.000Z",
+          lastError: "Quota exceeded",
+        },
+      }),
+    );
+
+    const dismissedState = dismissError(initialState, threadId);
+    const next = syncServerReadModel(
+      dismissedState,
+      makeReadModel(
+        makeReadModelThread({
+          id: threadId,
+          session: {
+            threadId,
+            status: "error",
+            providerName: "codex",
+            runtimeMode: "approval-required",
+            activeTurnId: null,
+            lastError: "Quota exceeded",
+            updatedAt: "2026-02-27T00:00:00.000Z",
+          },
+        }),
+      ),
+    );
+
+    expect(next.threads[0]?.error).toBeNull();
+    expect(next.dismissedErrors[threadId]).toBe("Quota exceeded");
+  });
+
+  it("shows a new server error after a previous one was dismissed", () => {
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const initialState = makeState(
+      makeThread({
+        id: threadId,
+        error: "Quota exceeded",
+        session: {
+          provider: "codex",
+          status: "error",
+          orchestrationStatus: "error",
+          createdAt: "2026-02-27T00:00:00.000Z",
+          updatedAt: "2026-02-27T00:00:00.000Z",
+          lastError: "Quota exceeded",
+        },
+      }),
+    );
+
+    const dismissedState = dismissError(initialState, threadId);
+    const next = syncServerReadModel(
+      dismissedState,
+      makeReadModel(
+        makeReadModelThread({
+          id: threadId,
+          session: {
+            threadId,
+            status: "error",
+            providerName: "codex",
+            runtimeMode: "approval-required",
+            activeTurnId: null,
+            lastError: "New quota exceeded warning",
+            updatedAt: "2026-02-27T00:01:00.000Z",
+          },
+        }),
+      ),
+    );
+
+    expect(next.threads[0]?.error).toBe("New quota exceeded warning");
+    expect(next.dismissedErrors[threadId]).toBeUndefined();
   });
 });
